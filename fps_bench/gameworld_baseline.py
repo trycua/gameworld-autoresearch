@@ -6,6 +6,8 @@ import argparse
 import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from datetime import datetime, timezone
 import importlib.util
 import json
@@ -14,6 +16,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 
@@ -27,6 +30,29 @@ def upstream_module(home: Path, name: str):
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+class GameServer:
+    def __init__(self, home: Path, game: str):
+        self.directory = home / "games/gameworld-games/benchmark" / game
+        self.server = None
+        self.thread = None
+
+    def start(self) -> str:
+        if not (self.directory / "index.html").is_file():
+            raise FileNotFoundError(self.directory / "index.html")
+        self.server = ThreadingHTTPServer(
+            ("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=str(self.directory)),
+        )
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        return f"http://127.0.0.1:{self.server.server_port}/index.html"
+
+    def stop(self):
+        if self.server:
+            self.server.shutdown()
+            self.server.server_close()
+            self.thread.join(timeout=5)
 
 
 async def driver_command(driver: str, socket: str, *arguments: str) -> dict:
@@ -55,7 +81,17 @@ async def game_environment(config: dict, output: Path, driver: str):
     from playwright.async_api import async_playwright
 
     home = Path(os.environ.get("GAMEWORLD_HOME", "/opt/GameWorld"))
-    launcher = upstream_module(home, "game_launcher").GameLauncher(config["game"])
+    from PIL import ImageGrab
+
+    for attempt in range(60):
+        try:
+            ImageGrab.grab(xdisplay=os.environ.get("DISPLAY", ":1"))
+            break
+        except OSError:
+            await asyncio.sleep(0.5)
+    else:
+        raise RuntimeError("X11 desktop did not become ready")
+    launcher = GameServer(home, config["game"])
     session = "gameworld-" + uuid.uuid4().hex
     with tempfile.TemporaryDirectory(prefix="gameworld-driver-") as directory:
         socket = str(Path(directory) / "driver.sock")
@@ -123,7 +159,8 @@ async def game_environment(config: dict, output: Path, driver: str):
                             await asyncio.sleep(0.1)
                         if not target:
                             raise RuntimeError("GameWorld browser window not found by driver")
-                        arguments = {"pid": target["pid"], "window_id": target.get("window_id", target.get("id"))}
+                        arguments = {"pid": target["pid"], "window_id": target.get("window_id", target.get("id")),
+                                     "delivery_mode": config["delivery_mode"]}
                         frame = target.get("frame") or target.get("bounds")
                         if not frame:
                             raise RuntimeError("driver window frame missing")

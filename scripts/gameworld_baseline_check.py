@@ -60,4 +60,25 @@ class DriverResponseTests(unittest.TestCase):
                 asyncio.run(driver_command("driver", "/tmp/socket", "call", "press_key", "{}"))
 
 
+class GameServerTests(unittest.TestCase):
+    def test_ephemeral_server_stops_cleanly(self):
+        from fps_bench.gameworld_baseline import GameServer
+        import urllib.request
+
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            game = home / "games/gameworld-games/benchmark/01_2048"
+            game.mkdir(parents=True)
+            (game / "index.html").write_text("game-server-test")
+            for attempt in range(2):
+                server = GameServer(home, "01_2048")
+                try:
+                    url = server.start()
+                    with urllib.request.urlopen(url, timeout=5) as response:
+                        self.assertEqual(response.read(), b"game-server-test")
+                finally:
+                    server.stop()
+                self.assertFalse(server.thread.is_alive())
+
+
 unittest.main()

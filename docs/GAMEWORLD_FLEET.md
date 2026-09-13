@@ -65,7 +65,10 @@ sends gameplay keys/clicks. The unmodified upstream task evaluator scores state.
 
 This is a custom visual cua-driver pilot, not an official GameWorld leaderboard
 result or a reproduction of upstream timing/action protocols. 2048 uses 80ms
-arrow presses and fresh browser storage with seed 42. Invalid responses consume
+arrow presses with explicit `delivery_mode=foreground` (native XTest), and
+fresh browser storage with seed 42. The game server binds an ephemeral local
+port. The default background input path did not deliver Chromium key events
+in the first integration test; the driver binary itself is not patched for this. Invalid responses consume
 a decision without input; infrastructure failures produce a failed manifest,
 not a completed zero score. The run stops at a terminal failure instead of
 resetting and combining multiple attempts into the one requested episode.
