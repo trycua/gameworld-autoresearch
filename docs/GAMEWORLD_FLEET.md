@@ -30,7 +30,9 @@ Unlike the L-platform image's BuildKit-only caches, the GameWorld image retains:
 - Build tools and native headers needed for source edits.
 
 Build and runtime use the same source/target paths and Cargo profile. CI runs a
-network-disabled no-op rebuild and rejects it if Cargo recompiles anything.
+network-disabled warm rebuild and rejects third-party dependency compilation
+or a warm rebuild taking 60 seconds or more. A fresh-container check can still
+revalidate local workspace crates (3.3 seconds observed in the first CI run).
 It then edits the driver entrypoint in a disposable container, measures the
 source-edit rebuild, and rejects dependency recompilation. There is
 no boot-time initial compile. Source edits still compile their affected crates;

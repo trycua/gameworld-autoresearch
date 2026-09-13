@@ -63,7 +63,26 @@ turn (relative mouse motion drives PointerLockControls), `press_key w` to walk, 
 `click` first to focus/lock. Re-plans after every action. Per-episode record includes
 presses vs keydowns seen (`delivery_ratio`) and mouse pixels sent vs seen (`mouse_ratio`).
 
-## Fleet image
+## GameWorld Environment (Qwen)
+
+`image/Dockerfile.gameworld` bundles the full upstream GameWorld game library
+and builds this repo's `cua-driver/` **before image publication**. It retains the
+Rust toolchain, downloaded dependencies, and native build artifacts for offline
+patch-and-rebuild iterations inside Fleet. This is separate from the L-platform
+image; its GHCR tag is `gameworld`.
+
+The first visual adapter runs GameWorld 2048 task `01_01` through Qwen and native
+cua-driver input. Inside the game image, run:
+
+```bash
+bash .auto/measure_gameworld.sh --output results/runs/my-experiment
+```
+
+See `docs/GAMEWORLD_FLEET.md` for provisioning, credentials, the exact episode
+contract, and cache verification. The legacy `.auto/measure.sh` remains the
+L-platform benchmark and should not be used for GameWorld experiments.
+
+## Legacy Fleet image
 
 `image/Dockerfile`: `FROM …cua-ubuntu-24.04:docker-latest` + bench_ui/pywebview +
 Rust 1.97.1 + sparse clone of `trycua/cua` (`libs/cua-driver`) at `CUA_REF`, crates

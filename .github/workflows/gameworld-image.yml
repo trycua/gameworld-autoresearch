@@ -62,7 +62,7 @@ jobs:
             SOURCE_URL=https://github.com/${{ github.repository }}
           cache-from: type=gha,scope=gameworld-fleet-worker
           cache-to: type=gha,mode=max,scope=gameworld-fleet-worker
-      - name: Verify baked build artifacts support offline no-op rebuild
+      - name: Verify baked artifacts support fast offline rebuilds
         env:
           IMAGE: ${{ steps.image.outputs.tag }}
         shell: bash
@@ -70,9 +70,12 @@ jobs:
           docker run --rm --network none --entrypoint /bin/bash "$IMAGE" -c '
             set -euo pipefail
             cd "$CUA_DRIVER_SRC/rust"
-            cargo build --offline --locked --release -p cua-driver 2>&1 | tee /tmp/rebuild.log
-            if grep -q "Compiling " /tmp/rebuild.log; then
-              echo "Baked artifacts were not reused" >&2
+            SECONDS=0
+            CARGO_LOG=cargo::core::compiler::fingerprint=info cargo build --offline --locked --release -p cua-driver 2>&1 | tee /tmp/rebuild.log
+            echo "Fresh-container warm rebuild seconds: $SECONDS"
+            test "$SECONDS" -lt 60
+            if grep "Compiling " /tmp/rebuild.log | grep -v "(/opt/gameworld-autoresearch/cua-driver/rust/"; then
+              echo "Baked third-party dependencies were not reused" >&2
               exit 1
             fi
             bash /opt/gameworld-autoresearch/image/rebuild_driver.sh
