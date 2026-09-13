@@ -3,6 +3,9 @@
 The full game environment is `image/Dockerfile.gameworld`, published by
 `.github/workflows/gameworld-image.yml` as `ghcr.io/trycua/gameworld-autoresearch:gameworld`.
 Use the workflow's `gameworld-fleet-image-<commit>` artifact to provision by digest.
+Provision the digest with `scripts/qwen_fleet.py provision --runtime gvisor
+--name-prefix qwen-gameworld --image "$IMAGE" --state results/runs/fleet-gameworld`.
+This retains the minimum 0 / maximum 20 pool configuration.
 The earlier `Dockerfile.qwen` and its `main` tag remain the L-platform pilot.
 
 The GameWorld image contains the upstream runtime/catalog and all 34 game

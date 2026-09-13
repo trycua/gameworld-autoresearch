@@ -80,7 +80,9 @@ async def main(args):
         if args.runtime == "gvisor":
             check_public_ghcr(image)
         args.state.mkdir(parents=True, exist_ok=False)
-        name = "qwen-lplatform-" + datetime.now(timezone.utc).strftime("%Y%m%d") + "-" + uuid.uuid4().hex[:6]
+        if not re.fullmatch(r"[a-z][a-z0-9-]{0,38}[a-z0-9]", args.name_prefix):
+            raise ValueError("name-prefix must be 2..40 lowercase letters/digits/hyphens")
+        name = args.name_prefix + "-" + datetime.now(timezone.utc).strftime("%Y%m%d") + "-" + uuid.uuid4().hex[:6]
         metadata = {"pool": name, "claim": "baseline", "image": image, "runtime": args.runtime,
                     "cpu": 4, "memory_mb": 16384, "min_pool_size": 0, "max_pool_size": 20, "pool_ttl_seconds": 21600,
                     "claim_ttl_seconds": 14400, "created_at": datetime.now(timezone.utc).isoformat()}
@@ -177,6 +179,7 @@ if __name__ == "__main__":
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--runtime", choices=("vm", "gvisor"), default="vm")
     parser.add_argument("--image")
+    parser.add_argument("--name-prefix", default="qwen-lplatform")
     parser.add_argument("--command")
     parser.add_argument("--local", type=Path)
     parser.add_argument("--remote")
