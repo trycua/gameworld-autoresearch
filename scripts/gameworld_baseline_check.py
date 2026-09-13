@@ -9,10 +9,18 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from fps_bench.gameworld_protocol import model_messages, parse_action
+from fps_bench.gameworld_protocol import RESPONSE_FORMAT, model_messages, parse_action
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_schema_matches_parser(self):
+        schema = RESPONSE_FORMAT["json_schema"]["schema"]
+        self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(set(schema["required"]), {"action", "key"})
+        self.assertEqual(schema["properties"]["action"]["enum"], ["key"])
+        for key in schema["properties"]["key"]["enum"]:
+            self.assertEqual(parse_action(json.dumps({"action": "key", "key": key}))["key"], key)
+
     def test_arrows(self):
         for key in ("up", "down", "left", "right"):
             self.assertEqual(parse_action(json.dumps({"action": "key", "key": key}))["key"], key)

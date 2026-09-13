@@ -28,6 +28,8 @@ COPY fps_bench/ fps_bench/
 COPY configs/ configs/
 COPY image/rebuild_driver.sh image/smoke_gameworld.py image/write_provenance.py image/
 COPY .auto/measure_gameworld.sh .auto/measure_gameworld.sh
+COPY docs/GAMEWORLD_FLEET.md docs/GAMEWORLD_FLEET.md
+COPY README.md README.md
 ARG SOURCE_REVISION
 ARG SOURCE_URL=https://github.com/trycua/gameworld-autoresearch
 RUN /opt/gameworld-venv/bin/python image/write_provenance.py "$SOURCE_REVISION"

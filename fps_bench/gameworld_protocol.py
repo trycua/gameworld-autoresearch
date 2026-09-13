@@ -14,6 +14,24 @@ Allowed keys: up, down, left, right. No explanation or Markdown.
 '''
 
 
+RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "gameworld_arrow_action",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["key"]},
+                "key": {"type": "string", "enum": ["up", "down", "left", "right"]},
+            },
+            "required": ["action", "key"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
 def parse_action(text: str) -> dict:
     action = json.loads(text)
     if (not isinstance(action, dict) or set(action) != {"action", "key"}

@@ -58,7 +58,10 @@ For a rebuild without an episode: `bash image/rebuild_driver.sh`.
 ## Episode contract and validation
 
 `configs/qwen-gameworld-baseline.json` fixes the model revision, game/task, seed,
-60-step budget, and 900-second timeout. Qwen sees only a desktop screenshot and
+60-step budget, and 900-second timeout. Protocol v2 requests server-side JSON
+schema-constrained decoding: exactly one of four arrow actions, with no extra
+fields. The model still chooses the direction. Raw protocol v1 produced malformed
+JSON actions; those results must be kept separate from v2. Qwen sees only a desktop screenshot and
 its four previous responses. All gameplay input is native cua-driver input;
 Playwright launches the visible browser and accesses evaluator state, never
 sends gameplay keys/clicks. The unmodified upstream task evaluator scores state.

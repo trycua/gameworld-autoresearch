@@ -20,7 +20,7 @@ import threading
 import time
 import uuid
 
-from fps_bench.gameworld_protocol import PROMPT, model_messages, parse_action
+from fps_bench.gameworld_protocol import PROMPT, RESPONSE_FORMAT, model_messages, parse_action
 from fps_bench.qwen_baseline import ROOT, endpoint, request, sha256, source_manifest, write_json
 
 
@@ -207,7 +207,7 @@ async def run(config: dict, output: Path, driver: str) -> dict:
             ImageGrab.grab(xdisplay=os.environ.get("DISPLAY", ":1")).save(image)
             payload = {"model": config["served_model"], "messages": model_messages(image, history),
                        "temperature": config["temperature"], "seed": config["seed"],
-                       "max_tokens": config["max_tokens"]}
+                       "max_tokens": config["max_tokens"], "response_format": RESPONSE_FORMAT}
             response = await asyncio.to_thread(request, base, "/chat/completions",
                                                config["request_timeout_seconds"], payload)
             write_json(output / f"{step:03d}-response.json", response)
