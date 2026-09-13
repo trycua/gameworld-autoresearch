@@ -6,6 +6,9 @@ desktop: reach the goal at the far end of an L-shaped platform. A minimal agent
 acts only through `cua-driver call …`, and a pi-autoresearch loop patches the
 vendored cua-driver source on parallel CUA Fleet sandboxes to raise the score.
 
+Qwen visual-policy pilot: [baseline infrastructure and runbook](docs/QWEN_BASELINE.md).
+Container publishing: [GitHub Actions / public GHCR / Fleet gVisor](docs/GHCR_FLEET.md).
+
 Brief: `docs/BRIEF.md`. Design: `docs/plans/2026-08-29-fps-cua-driver-bench-design.md`.
 Results: `docs/results/2026-08-29-mouse-look-baseline-vs-exp4.md`.
 

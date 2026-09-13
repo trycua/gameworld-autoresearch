@@ -1,0 +1,19 @@
+{
+  "protocol": "lplatform-qwen-visual-v1",
+  "model": "Qwen/Qwen3-VL-2B-Instruct",
+  "revision": "89644892e4d85e24eaac8bacfd4f463576704203",
+  "served_model": "qwen3-vl-2b-instruct-89644892e4d8",
+  "vllm_version": "0.13.0",
+  "gpu": "L4",
+  "episodes": 5,
+  "max_steps": 60,
+  "episode_timeout_seconds": 900,
+  "request_timeout_seconds": 120,
+  "settle_ms": 150,
+  "temperature": 0.0,
+  "seed": 42,
+  "max_tokens": 128,
+  "history_actions": 4,
+  "max_model_len": 8192,
+  "enforce_eager": true
+}

@@ -1,0 +1,68 @@
+# syntax=docker/dockerfile:1
+ARG BASE_IMAGE=public.ecr.aws/k5j5w0x5/cua-ubuntu-24.04@sha256:c67f330f287b0e5124f57c64bcf06a7e4b90208186c3036e1312b15d854f6d13
+FROM ${BASE_IMAGE} AS build
+USER root
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ENV DEBIAN_FRONTEND=noninteractive \
+    CARGO_HOME=/opt/gameworld-rust/cargo \
+    RUSTUP_HOME=/opt/gameworld-rust/rustup \
+    PATH=/opt/gameworld-rust/cargo/bin:$PATH \
+    CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 \
+    CARGO_PROFILE_RELEASE_DEBUG=0 CARGO_PROFILE_RELEASE_STRIP=true
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential pkg-config ca-certificates curl \
+    libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev libxkbcommon-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY cua-driver/ /build/cua-driver/
+WORKDIR /build/cua-driver/rust
+RUN toolchain=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml) \
+    && test -n "$toolchain" \
+    && curl -fsSL https://sh.rustup.rs -o /tmp/rustup.sh \
+    && sh /tmp/rustup.sh -y --no-modify-path --default-toolchain "$toolchain" --profile minimal
+RUN --mount=type=cache,target=/opt/gameworld-rust/cargo/registry \
+    --mount=type=cache,target=/opt/gameworld-rust/cargo/git \
+    --mount=type=cache,target=/build/cua-driver/rust/target \
+    cargo build --locked --release -p cua-driver \
+    && install -Dm755 target/release/cua-driver /opt/gameworld-bin/cua-driver
+
+FROM ${BASE_IMAGE}
+USER root
+ENV DEBIAN_FRONTEND=noninteractive \
+    DISPLAY=:1 PYWEBVIEW_GUI=gtk \
+    CARGO_HOME=/opt/gameworld-rust/cargo \
+    RUSTUP_HOME=/opt/gameworld-rust/rustup \
+    CARGO_TARGET_DIR=/opt/gameworld-target \
+    CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 \
+    CARGO_PROFILE_RELEASE_DEBUG=0 CARGO_PROFILE_RELEASE_STRIP=true \
+    QWEN_PYTHON=/opt/gameworld-venv/bin/python \
+    PATH=/opt/gameworld-rust/cargo/bin:$PATH
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential pkg-config git ca-certificates curl \
+    libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev libxkbcommon-dev \
+    python3-gi gir1.2-webkit2-4.1 gir1.2-gtk-3.0 python3-venv xdotool \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv --system-site-packages /opt/gameworld-venv \
+    && /opt/gameworld-venv/bin/python -m pip install --no-cache-dir \
+       'cua-bench==0.2.11' 'cua-bench-ui==0.7.0' 'pywebview==6.2.1' 'pillow==11.3.0'
+COPY --from=build /opt/gameworld-rust/ /opt/gameworld-rust/
+COPY --from=build /opt/gameworld-bin/cua-driver /usr/local/bin/cua-driver
+WORKDIR /opt/gameworld-autoresearch
+COPY cua-driver/ cua-driver/
+COPY fps_bench/ fps_bench/
+COPY bench/ bench/
+COPY tasks/ tasks/
+COPY configs/ configs/
+COPY infra/ infra/
+COPY image/smoke_qwen.py image/write_provenance.py image/
+COPY .auto/measure_qwen.sh .auto/measure_qwen.sh
+COPY pyproject.toml README.md .gitignore ./
+ARG SOURCE_REVISION
+ARG SOURCE_URL=https://github.com/trycua/gameworld-autoresearch
+RUN /opt/gameworld-venv/bin/python image/write_provenance.py "$SOURCE_REVISION" \
+    && cua-driver --version \
+    && /opt/gameworld-venv/bin/python -c 'import bench_ui, cua_bench; from PIL import ImageGrab'
+LABEL org.opencontainers.image.source="${SOURCE_URL}" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      org.opencontainers.image.description="L-platform Qwen visual baseline worker for Fleet gVisor"
+EXPOSE 8000 6080
+CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/supervisord.conf"]

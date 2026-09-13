@@ -9,6 +9,10 @@ dependencies = [
     "anthropic>=0.60.0",
 ]
 
+[project.optional-dependencies]
+baseline = ["pillow==11.3.0"]
+infra = ["modal==1.5.5"]
+
 [tool.uv]
 extra-index-url = ["https://wheels.cua.ai/simple"]
 

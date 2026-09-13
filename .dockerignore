@@ -4,3 +4,10 @@ results/
 .auto/runs/
 cua-driver/rust/target/
 **/__pycache__/
+
+.venv-*/
+.env
+.env.*
+**/.env
+**/.env.*
+.playwright-mcp/
