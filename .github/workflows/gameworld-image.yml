@@ -76,6 +76,14 @@ jobs:
               exit 1
             fi
             bash /opt/gameworld-autoresearch/image/rebuild_driver.sh
+            printf "\n" >> crates/cua-driver/src/main.rs
+            SECONDS=0
+            cargo build --offline --locked --release -p cua-driver 2>&1 | tee /tmp/patched-rebuild.log
+            echo "Source-edit rebuild seconds: $SECONDS"
+            if grep "Compiling " /tmp/patched-rebuild.log | grep -v "Compiling cua-driver v"; then
+              echo "A source-only edit unexpectedly recompiled dependencies" >&2
+              exit 1
+            fi
           '
       - name: Smoke-test the desktop before publishing
         env:
