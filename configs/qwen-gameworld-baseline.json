@@ -1,0 +1,16 @@
+{
+  "protocol": "gameworld-2048-cua-qwen-v1",
+  "game": "01_2048",
+  "task": "01_01",
+  "model": "Qwen/Qwen3-VL-2B-Instruct",
+  "revision": "89644892e4d85e24eaac8bacfd4f463576704203",
+  "served_model": "qwen3-vl-2b-instruct-89644892e4d8",
+  "seed": 42,
+  "max_steps": 60,
+  "timeout_seconds": 900,
+  "request_timeout_seconds": 120,
+  "temperature": 0,
+  "max_tokens": 128,
+  "hold_ms": 80,
+  "settle_seconds": 0.3
+}

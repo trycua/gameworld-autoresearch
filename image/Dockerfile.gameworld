@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1
+ARG WORKER_BASE=ghcr.io/trycua/gameworld-autoresearch@sha256:b1bf500206e200d3a87880f563a3d03e690e2ad4efa5f70b817a11fc2f7a80e6
+FROM ${WORKER_BASE}
+USER root
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ARG GAMEWORLD_REVISION=3c26bdab436800fd61ef40543b64ca40d12c7e4a
+ARG GAMEWORLD_GAMES_REVISION=55322928fa8bd51cb1719bd3807a32634aa5d3cb
+ENV GAMEWORLD_HOME=/opt/GameWorld \
+    CUA_DRIVER_SRC=/opt/gameworld-autoresearch/cua-driver \
+    CARGO_TARGET_DIR=/opt/gameworld-target \
+    CARGO_INCREMENTAL=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/gameworld-browsers
+RUN git clone https://github.com/gameworld-project/GameWorld.git "$GAMEWORLD_HOME" \
+    && git -C "$GAMEWORLD_HOME" checkout --detach "$GAMEWORLD_REVISION" \
+    && git clone https://github.com/gameworld-project/GameWorld-Games.git "$GAMEWORLD_HOME/games/gameworld-games" \
+    && git -C "$GAMEWORLD_HOME/games/gameworld-games" checkout --detach "$GAMEWORLD_GAMES_REVISION" \
+    && /opt/gameworld-venv/bin/pip install --no-cache-dir 'playwright==1.45.0' 'pyyaml==6.0.2' \
+    && /opt/gameworld-venv/bin/python -m playwright install --with-deps chromium
+WORKDIR /opt/gameworld-autoresearch
+RUN rm -rf cua-driver
+COPY cua-driver/ cua-driver/
+RUN cd "$CUA_DRIVER_SRC/rust" \
+    && cargo build --locked --release -p cua-driver \
+    && install -m755 "$CARGO_TARGET_DIR/release/cua-driver" /usr/local/bin/cua-driver \
+    && cargo build --offline --locked --release -p cua-driver \
+    && cua-driver --version
+COPY fps_bench/ fps_bench/
+COPY configs/ configs/
+COPY image/rebuild_driver.sh image/smoke_gameworld.py image/write_provenance.py image/
+COPY .auto/measure_gameworld.sh .auto/measure_gameworld.sh
+ARG SOURCE_REVISION
+ARG SOURCE_URL=https://github.com/trycua/gameworld-autoresearch
+RUN /opt/gameworld-venv/bin/python image/write_provenance.py "$SOURCE_REVISION"
+LABEL org.opencontainers.image.source="${SOURCE_URL}" \
+    org.opencontainers.image.revision="${SOURCE_REVISION}" \
+    org.opencontainers.image.description="GameWorld game library with locally vendored cua-driver and retained native Rust build artifacts"
