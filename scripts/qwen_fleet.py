@@ -147,6 +147,8 @@ async def main(args):
             result = await sandbox.shell.run(command, timeout=25)
             if not result.success or result.stdout.split()[0] != digest.hexdigest():
                 raise RuntimeError("upload integrity check failed")
+            for part in parts:
+                await sandbox.files.remove(part)
             await sandbox.files.remove_dir(staging)
             print(f"Upload complete: {digest.hexdigest()}")
         elif args.operation == "download":
