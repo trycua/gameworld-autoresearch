@@ -42,6 +42,8 @@ async def driver_command(driver: str, socket: str, *arguments: str) -> dict:
         raise RuntimeError("driver request timed out") from None
     if process.returncode:
         raise RuntimeError(f"driver failed: {stderr.decode(errors='replace')[-1000:]}")
+    if arguments[0] == "status":
+        return {"status": "ready"}
     data = json.loads(stdout)
     if not isinstance(data, dict) or data.get("isError"):
         raise RuntimeError(f"driver tool error: {data}")

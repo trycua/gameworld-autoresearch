@@ -7,7 +7,9 @@ The earlier `Dockerfile.qwen` and its `main` tag remain the L-platform pilot.
 
 The GameWorld image contains the upstream runtime/catalog and all 34 game
 snapshots, pinned to commits in the Dockerfile. Upstream rights notices remain
-with the snapshots. The first supported Qwen adapter is GameWorld 2048 task
+with the snapshots. The upstream library is research/education-only and includes
+third-party rights restrictions; public image availability does not grant
+commercial-use rights. The first supported Qwen adapter is GameWorld 2048 task
 `01_01` (reach a 32 tile); this is not a claim of 34-game agent coverage.
 
 ## Driver build and patch loop

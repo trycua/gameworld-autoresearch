@@ -21,6 +21,11 @@ async def main():
                     key: event.key, trusted: event.isTrusted
                 }));
             }""")
+            from PIL import ImageGrab
+
+            screenshot = ImageGrab.grab(xdisplay=":1")
+            assert min(screenshot.size) > 100
+            assert await page.locator(".tile").count() >= 2
             before = await page.evaluate("window.gameAPI.getState()")
             for key in ("left", "down", "right", "up"):
                 await call("press_key", {**target, "key": key, "hold_ms": 80})
