@@ -17,8 +17,12 @@ on:
       - scripts/gameworld_baseline_check.py
       - scripts/gameworld_driver_contract.py
       - scripts/gameworld_driver_worker.py
+      - scripts/gameworld_image_check.py
       - scripts/gameworld_rollout_worker.py
+      - .auto/gameworld-prompt.md
       - .auto/measure_gameworld.sh
+      - docs/GAMEWORLD_FLEET.md
+      - README.md
       - pyproject.toml
 
 permissions:
@@ -38,7 +42,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Check baseline protocol
-        run: python3 scripts/gameworld_baseline_check.py
+        run: |
+          python3 scripts/gameworld_baseline_check.py
+          python3 scripts/gameworld_image_check.py
       - name: Choose image name
         id: image
         shell: bash

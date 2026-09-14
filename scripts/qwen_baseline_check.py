@@ -16,7 +16,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from fps_bench.qwen_baseline import collect, endpoint, request, write_json, source_file_hashes, source_manifest
+from fps_bench.qwen_baseline import (
+    collect, endpoint, request, runtime_file_hashes, source_file_hashes, source_manifest, write_json,
+)
 from fps_bench.qwen_protocol import PROMPT, messages, parse_action
 
 
@@ -78,6 +80,22 @@ class ProtocolChecks(unittest.TestCase):
                 source.write_text('value = 2\n')
                 self.assertTrue(source_manifest()['image_source_modified'])
                 self.assertEqual(source_manifest()['git_commit'], 'a' * 40)
+
+    def test_schema_two_provenance_detects_new_runtime_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'fps_bench').mkdir()
+            (root / 'fps_bench/policy.py').write_text('value = 1\n')
+            (root / 'README.md').write_text('# Runtime\n')
+            inventory = {'source_roots': ['fps_bench'], 'source_files': ['README.md']}
+            with patch('fps_bench.qwen_baseline.ROOT', root):
+                (root / 'image-source.json').write_text(json.dumps({
+                    'schema_version': 2, 'git_commit': 'a' * 40,
+                    **inventory, 'files_sha256': runtime_file_hashes(root, **inventory),
+                }))
+                self.assertFalse(source_manifest()['image_source_modified'])
+                (root / 'fps_bench/new_runtime.py').write_text('value = 2\n')
+                self.assertTrue(source_manifest()['image_source_modified'])
 
     def test_atomic_artifact(self):
         with tempfile.TemporaryDirectory() as folder:

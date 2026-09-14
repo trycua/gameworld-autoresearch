@@ -27,6 +27,12 @@ The image copies **this repository's** `cua-driver/`, not an upstream replacemen
 to `/opt/gameworld-autoresearch/cua-driver`. Docker builds it natively before
 publishing and installs it as `/usr/local/bin/cua-driver`.
 
+`image-source.json` uses provenance schema 2. It records every file under each
+runtime source tree actually present in the image, the installed driver binary
+SHA256, and the checked-out GameWorld and GameWorld-Games revisions. Runtime
+source checks recompute the recorded tree inventory, so changed, removed, or newly
+added candidate source files cannot remain hidden behind the build commit label.
+
 Unlike the L-platform image's BuildKit-only caches, the GameWorld image retains:
 
 - `/opt/gameworld-target`: release artifacts, dependency fingerprints and

@@ -34,7 +34,7 @@ COPY docs/GAMEWORLD_FLEET.md docs/GAMEWORLD_FLEET.md
 COPY README.md README.md
 ARG SOURCE_REVISION
 ARG SOURCE_URL=https://github.com/trycua/gameworld-autoresearch
-RUN /opt/gameworld-venv/bin/python image/write_provenance.py "$SOURCE_REVISION"
+RUN /opt/gameworld-venv/bin/python image/write_provenance.py "$SOURCE_REVISION" --require-gameworld
 LABEL org.opencontainers.image.source="${SOURCE_URL}" \
     org.opencontainers.image.revision="${SOURCE_REVISION}" \
     org.opencontainers.image.description="GameWorld game library with locally vendored cua-driver and retained native Rust build artifacts"

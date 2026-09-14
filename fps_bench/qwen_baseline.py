@@ -107,13 +107,57 @@ def source_file_hashes() -> dict[str, str]:
     }
 
 
+def runtime_file_hashes(root: Path, source_roots: list[str], source_files: list[str]) -> dict[str, str]:
+    root = Path(root).resolve()
+    if (not isinstance(source_roots, list) or not isinstance(source_files, list)
+            or any(not isinstance(name, str) for name in [*source_roots, *source_files])
+            or len(set(source_roots)) != len(source_roots)
+            or len(set(source_files)) != len(source_files)
+            or set(source_roots) & set(source_files)):
+        raise ValueError("Runtime provenance inventory is invalid")
+    candidates = []
+    for name in [*source_roots, *source_files]:
+        relative = Path(name)
+        if relative.is_absolute() or ".." in relative.parts or str(relative) in ("", "."):
+            raise ValueError("Runtime provenance paths must stay beneath the image source root")
+        path = root / relative
+        if name in source_roots:
+            if not path.is_dir() or path.is_symlink():
+                raise ValueError(f"Runtime provenance source root is unavailable: {name}")
+            for item in path.rglob("*"):
+                if item.is_symlink():
+                    raise ValueError(f"Runtime provenance refuses symbolic links: {item.relative_to(root)}")
+                if item.is_file():
+                    candidates.append(item)
+        else:
+            if not path.is_file() or path.is_symlink():
+                raise ValueError(f"Runtime provenance source file is unavailable: {name}")
+            candidates.append(path)
+    result = {}
+    for path in sorted(set(candidates)):
+        relative = path.relative_to(root)
+        if any(part in {".git", ".venv", "__pycache__", "node_modules", "target"}
+               for part in relative.parts):
+            continue
+        result[str(relative)] = sha256(path)
+    if not result:
+        raise ValueError("Runtime provenance contains no source files")
+    return result
+
+
 def source_manifest() -> dict:
-    hashes = source_file_hashes()
     if not (ROOT / ".git").exists():
         recorded = json.loads((ROOT / "image-source.json").read_text())
+        if recorded.get("schema_version") == 2:
+            hashes = runtime_file_hashes(
+                ROOT, recorded.get("source_roots", []), recorded.get("source_files", []))
+        else:
+            hashes = source_file_hashes()
         return {"git_commit": recorded["git_commit"], "git_status": None,
                 "tracked_diff_sha256": None, "files_sha256": hashes,
                 "image_source_modified": hashes != recorded["files_sha256"]}
+
+    hashes = source_file_hashes()
 
     def git(*arguments):
         return subprocess.check_output(["git", *arguments], cwd=ROOT).decode()
