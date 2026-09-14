@@ -10,7 +10,7 @@ from fps_bench.campaign_ledger import BudgetRefused, LedgerConflict, positive_in
 from fps_bench.evaluation_contract import canonical, digest, exclusive_write, schedule
 from fps_bench.evaluation_contract import verify as verify_contract_sources
 from fps_bench.gameworld_evaluation import validate_contract
-from fps_bench.gameworld_grpo import validate_policy_identity
+from fps_bench.gameworld_grpo import policy_digest, validate_policy_identity
 from fps_bench.gameworld_research import (
     DEFAULT_CATALOG,
     DEFAULT_POLICY,
@@ -80,7 +80,7 @@ class GameWorldCoordinator:
             "contract_hash": self.controller.contract_hash,
             "image": self.controller.contract["spec"]["provenance"]["image"],
             "driver_sha256": self.controller.contract["spec"]["baseline_driver_sha256"],
-            "policy_sha256": digest(policy_bytes),
+            "policy_sha256": policy_digest(identity),
             "model": {
                 "base_model": identity["base_model"], "base_revision": identity["base_revision"],
                 "processor_revision": identity["base_revision"], "adapter_sha256": None,

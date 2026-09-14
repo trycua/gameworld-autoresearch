@@ -14,7 +14,7 @@ import scripts.campaign_controller_check as fixtures
 from fps_bench.campaign_controller import CampaignController
 from fps_bench.evaluation_contract import canonical, digest
 from fps_bench.gameworld_fleet import GameWorldFleetExecutor, extract_output_archive
-from fps_bench.gameworld_grpo import reward_components
+from fps_bench.gameworld_grpo import policy_digest, reward_components
 from fps_bench.gameworld_research import load_policy
 from fps_bench.gameworld_training import GameWorldTrainingRegistry
 
@@ -136,7 +136,7 @@ class FleetExecutorTests(unittest.TestCase):
         controller.initialize("rollout-controller")
         baseline = copy.deepcopy(source.baseline)
         baseline["contract_hash"] = contract_hash
-        baseline["policy_sha256"] = digest(identity_path.read_bytes())
+        baseline["policy_sha256"] = policy_digest(identity)
         controller.register_candidate(baseline)
         train = contract["public_splits"]["train"]["tasks"][0]
         assignment = {"split": "train", "task_id": train["id"], "game": train["game"],
@@ -244,7 +244,7 @@ class FleetExecutorTests(unittest.TestCase):
         controller.initialize("evaluation-controller")
         candidate = copy.deepcopy(source.baseline)
         candidate.update(contract_hash=contract_hash, driver_sha256=digest(driver),
-                         policy_sha256=digest(policy_path.read_bytes()))
+                         policy_sha256=policy_digest(identity))
         candidate["model"] = {"base_model": identity["base_model"], "base_revision": identity["base_revision"],
                               "processor_revision": identity["base_revision"], "adapter_sha256": None,
                               "served_model": identity["served_model"]}
@@ -266,7 +266,7 @@ class FleetExecutorTests(unittest.TestCase):
         files = {"summary.json": digest(canonical(summary)), "trajectory.jsonl": digest(trajectory)}
         manifest = {"schema_version": 1, "contract_sha256": contract_hash, "assignment": assignment,
                     "candidate_sha256": digest(canonical(candidate)),
-                    "policy_sha256": digest(canonical(identity)), "driver_sha256": digest(driver),
+                    "policy_sha256": policy_digest(identity), "driver_sha256": digest(driver),
                     "files": files}
         (fixture / "manifest.json").write_bytes(canonical(manifest))
         result = {**assignment, "candidate": "baseline", "contract_sha256": contract_hash,

@@ -13,6 +13,7 @@ from fps_bench.fleet_provider import FleetLifecycle
 from fps_bench.gameworld_billing import GameWorldModalReconciler
 from fps_bench.gameworld_coordinator import GameWorldCoordinator
 from fps_bench.gameworld_fleet import GameWorldFleetExecutor
+from fps_bench.gameworld_grpo import policy_digest
 from fps_bench.gameworld_modal import GameWorldModalTrainingLifecycle, GameWorldTrainingArtifacts
 from fps_bench.gameworld_research_worker import GameWorldResearchWorker
 from fps_bench.gameworld_serving import GameWorldServingLifecycle
@@ -84,7 +85,7 @@ class GameWorldProviderRunner:
         path = (self.coordinator.state_root / "inputs/baseline-policy.json" if workflow is None
                 else Path(workflow["details"]["policy_path"]))
         data = path.read_bytes()
-        if digest(data) != candidate["policy_sha256"]:
+        if policy_digest(json.loads(data)) != candidate["policy_sha256"]:
             raise LedgerConflict("Candidate policy bytes differ from the controller manifest")
         return path
 

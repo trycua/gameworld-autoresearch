@@ -18,6 +18,7 @@ IMAGE = re.compile(r"^images/[0-9a-f]{64}\.png$")
 TRAJECTORY = re.compile(r"^trajectories/[a-z][a-z0-9_-]{0,63}\.jsonl$")
 FORBIDDEN_MESSAGE_KEYS = {"before", "after", "evaluation", "game_state", "metrics", "reward"}
 MAX_DATASET_BYTES = 512 * 1024 * 1024
+POLICY_FIELDS = {"base_model", "base_revision", "adapter_sha256", "served_model", "generation"}
 
 
 def reward_components(summary, settings):
@@ -156,17 +157,39 @@ def _trajectory(data, files):
     return rows, images
 
 
-def validate_policy_identity(expected_policy, policy):
-    if (not isinstance(expected_policy, dict)
-            or set(expected_policy) != {"base_model", "base_revision", "adapter_sha256", "served_model",
-                                        "deployment", "generation"}
-            or expected_policy["base_model"] != policy["model"]["base_model"]
-            or expected_policy["base_revision"] != policy["model"]["base_revision"]
-            or (expected_policy["adapter_sha256"] is not None
-                and not SHA256.fullmatch(expected_policy["adapter_sha256"]))
-            or not isinstance(expected_policy["served_model"], str)
-            or not 1 <= len(expected_policy["served_model"]) <= 128):
+def policy_core(identity):
+    if not isinstance(identity, dict) or set(identity) not in (POLICY_FIELDS, POLICY_FIELDS | {"deployment"}):
+        raise ValueError("Rollout policy identity is incomplete")
+    return {name: identity[name] for name in sorted(POLICY_FIELDS)}
+
+
+def policy_digest(identity):
+    return digest(canonical(policy_core(identity)))
+
+
+def validate_policy_core(expected_policy, policy):
+    core = policy_core(expected_policy)
+    if (core["base_model"] != policy["model"]["base_model"]
+            or core["base_revision"] != policy["model"]["base_revision"]
+            or (core["adapter_sha256"] is not None and not SHA256.fullmatch(core["adapter_sha256"]))
+            or not isinstance(core["served_model"], str)
+            or not 1 <= len(core["served_model"]) <= 128):
         raise ValueError("Rollout serving policy identity is incomplete")
+    generation = core["generation"]
+    if (not isinstance(generation, dict)
+            or set(generation) != {"temperature", "top_p", "max_tokens", "response_format"}
+            or type(generation["temperature"]) not in (int, float) or not 0 < generation["temperature"] <= 2
+            or type(generation["top_p"]) not in (int, float) or not 0 < generation["top_p"] <= 1
+            or type(generation["max_tokens"]) is not int or not 1 <= generation["max_tokens"] <= 512
+            or generation["response_format"] != "unconstrained-json-text"):
+        raise ValueError("GRPO rollouts require stochastic unconstrained policy sampling")
+    return core
+
+
+def validate_policy_identity(expected_policy, policy):
+    validate_policy_core(expected_policy, policy)
+    if "deployment" not in expected_policy:
+        raise ValueError("Rollout deployment identity is incomplete")
     deployment = expected_policy["deployment"]
     function = isinstance(deployment, dict) and set(deployment) == {
         "app_id", "function_id", "image_id", "endpoint_sha256"}
@@ -179,14 +202,6 @@ def validate_policy_identity(expected_policy, policy):
             or not re.fullmatch(r"im-[A-Za-z0-9]+", deployment["image_id"])
             or not SHA256.fullmatch(deployment["endpoint_sha256"])):
         raise ValueError("Rollout deployment identity is incomplete")
-    generation = expected_policy["generation"]
-    if (not isinstance(generation, dict)
-            or set(generation) != {"temperature", "top_p", "max_tokens", "response_format"}
-            or type(generation["temperature"]) not in (int, float) or not 0 < generation["temperature"] <= 2
-            or type(generation["top_p"]) not in (int, float) or not 0 < generation["top_p"] <= 1
-            or type(generation["max_tokens"]) is not int or not 1 <= generation["max_tokens"] <= 512
-            or generation["response_format"] != "unconstrained-json-text"):
-        raise ValueError("GRPO rollouts require stochastic unconstrained policy sampling")
     return expected_policy
 
 

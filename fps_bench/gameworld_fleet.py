@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 from fps_bench.campaign_ledger import LedgerConflict
 from fps_bench.evaluation_contract import canonical, digest, exclusive_write
 from fps_bench.gameworld_candidate_episode import verify_artifacts as verify_evaluation_artifacts
-from fps_bench.gameworld_grpo import validate_policy_identity, verify_rollout_dataset
+from fps_bench.gameworld_grpo import policy_digest, validate_policy_identity, verify_rollout_dataset
 from fps_bench.gameworld_research import load_policy
 
 
@@ -253,7 +253,7 @@ class GameWorldFleetExecutor:
         assignment = specification["assignment"]
         identity_bytes = Path(policy_identity_path).read_bytes()
         identity = json.loads(identity_bytes)
-        if canonical(identity) != identity_bytes or digest(identity_bytes) != assignment["policy_sha256"]:
+        if canonical(identity) != identity_bytes or policy_digest(identity) != assignment["policy_sha256"]:
             raise ValueError("Rollout policy identity differs from controller admission")
         validate_policy_identity(identity, self.policy)
         parsed = urlsplit(qwen_environment.get("QWEN_BASE_URL", ""))
@@ -324,7 +324,7 @@ class GameWorldFleetExecutor:
         identity = json.loads(identity_bytes)
         endpoint = qwen_environment.get("QWEN_BASE_URL", "").rstrip("/")
         parsed = urlsplit(endpoint)
-        if (canonical(identity) != identity_bytes or digest(identity_bytes) != candidate["policy_sha256"]
+        if (canonical(identity) != identity_bytes or policy_digest(identity) != candidate["policy_sha256"]
                 or parsed.scheme != "https" or parsed.username or parsed.password
                 or digest(endpoint.encode()) != identity.get("deployment", {}).get("endpoint_sha256")
                 or len(qwen_environment.get("QWEN_API_KEY", "")) < 32):

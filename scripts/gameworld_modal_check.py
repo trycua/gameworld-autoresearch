@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 import scripts.campaign_controller_check as fixtures
 from fps_bench.campaign_controller import CampaignController
 from fps_bench.evaluation_contract import canonical, digest
-from fps_bench.gameworld_grpo import reward_components
+from fps_bench.gameworld_grpo import policy_digest, reward_components
 from fps_bench.gameworld_modal import GameWorldModalSDKBackend, GameWorldTrainingArtifacts
 from fps_bench.gameworld_research import load_policy
 from fps_bench.modal_training import ModalTrainingLifecycle
@@ -78,7 +78,7 @@ class GameWorldModalTests(unittest.TestCase):
         self.controller.initialize("gameworld-modal")
         baseline = copy.deepcopy(source.baseline)
         baseline["contract_hash"] = self.contract_hash
-        baseline["policy_sha256"] = digest(canonical(self.identity))
+        baseline["policy_sha256"] = policy_digest(self.identity)
         self.controller.register_candidate(baseline)
         self.dataset = self.home / "dataset"
         (self.dataset / "images").mkdir(parents=True)

@@ -10,7 +10,7 @@ import tempfile
 from fps_bench.campaign_ledger import LedgerConflict
 from fps_bench.evaluation_contract import canonical, digest, exclusive_write
 from fps_bench.gameworld_fleet import verify_artifact_receipt
-from fps_bench.gameworld_grpo import verify_rollout_dataset
+from fps_bench.gameworld_grpo import policy_digest, verify_rollout_dataset
 from fps_bench.gameworld_research import DEFAULT_CATALOG, DEFAULT_POLICY, load_policy
 from fps_bench.training_data import verify_dataset
 
@@ -105,7 +105,7 @@ class GameWorldTrainingRegistry:
         verified = verify_rollout_dataset(
             Path(root) / "dataset", result["dataset_sha256"], policy=self.policy, context=self.context,
             expected_policy=identity, expected_driver_sha256=assignment["driver_sha256"])
-        if digest(canonical(identity)) != assignment["policy_sha256"] or verified["groups"] != 1:
+        if policy_digest(identity) != assignment["policy_sha256"] or verified["groups"] != 1:
             raise LedgerConflict("Rollout policy or group count differs from controller admission")
         return result["dataset_sha256"], json.loads((Path(root) / "dataset/rollouts.json").read_bytes())
 
@@ -256,7 +256,7 @@ class GameWorldTrainingRegistry:
                 policy_path = Path(candidate.get("policy_path", ""))
                 if (assignment["tasks"] != tasks or assignment["driver_sha256"] != candidate["driver_sha256"]
                         or not policy_path.is_file() or policy_path.is_symlink()
-                        or digest(policy_path.read_bytes()) != assignment["policy_sha256"]
+                        or policy_digest(json.loads(policy_path.read_bytes())) != assignment["policy_sha256"]
                         or candidate["policy_sha256"] != assignment["policy_sha256"]):
                     raise LedgerConflict("SFT training assignment differs from registered demonstrations")
                 policy_identity = json.loads(policy_path.read_bytes())
@@ -274,7 +274,7 @@ class GameWorldTrainingRegistry:
                 expected_policy=manifest["policy"], expected_driver_sha256=manifest["driver_sha256"])
             tasks = sorted({f"{group['game']}--{group['task']}" for group in manifest["groups"]})
             if (assignment["objective"] != "grpo" or tasks != sorted(assignment["tasks"])
-                    or assignment["policy_sha256"] != digest(canonical(manifest["policy"]))
+                    or assignment["policy_sha256"] != policy_digest(manifest["policy"])
                     or assignment["driver_sha256"] != manifest["driver_sha256"]
                     or verified["groups"] != len(manifest["groups"])):
                 raise LedgerConflict("Training assignment differs from authenticated GameWorld rollouts")

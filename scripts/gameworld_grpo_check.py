@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from fps_bench.evaluation_contract import canonical, digest
-from fps_bench.gameworld_grpo import group_advantages, reward_components, verify_grpo_adapter, verify_rollout_dataset
+from fps_bench.gameworld_grpo import group_advantages, policy_digest, reward_components, verify_grpo_adapter, verify_rollout_dataset
 from fps_bench.gameworld_research import load_policy
 
 
@@ -81,6 +81,14 @@ class GrpoTests(unittest.TestCase):
         result = group_advantages([1.0, 3.0])
         self.assertEqual(result["advantages"], [-1.0, 1.0])
         self.assertTrue(group_advantages([2.0, 2.0])["zero_variance"])
+
+    def test_policy_digest_excludes_ephemeral_deployment(self):
+        replacement = {**self.policy_identity,
+                       "deployment": {**self.policy_identity["deployment"],
+                                      "function_id": "fu-Replaced", "endpoint_sha256": "d" * 64}}
+        self.assertEqual(policy_digest(self.policy_identity), policy_digest(replacement))
+        changed = {**replacement, "generation": {**replacement["generation"], "max_tokens": 64}}
+        self.assertNotEqual(policy_digest(replacement), policy_digest(changed))
 
     def test_verified_rollout_dataset_has_no_privileged_state(self):
         identity, _ = self.build()

@@ -11,7 +11,7 @@ from urllib import request
 
 from fps_bench.campaign_ledger import BudgetRefused, LedgerConflict
 from fps_bench.evaluation_contract import canonical, digest, exclusive_write
-from fps_bench.gameworld_grpo import validate_policy_identity, verify_grpo_adapter
+from fps_bench.gameworld_grpo import policy_digest, validate_policy_identity, verify_grpo_adapter
 from fps_bench.modal_scope import check_scope
 from fps_bench.qwen_lora import verify_adapter as verify_sft_adapter
 
@@ -329,7 +329,7 @@ class GameWorldServingLifecycle:
             exclusive_write(root / "policy.json", canonical(policy_identity), 0o400)
         result = {"status": "complete", "candidate_id": plan["served_model"],
                   "adapter_manifest_sha256": plan["adapter_manifest_sha256"],
-                  "policy_sha256": digest(canonical(policy_identity)),
+                  "policy_sha256": policy_digest(policy_identity),
                   "deployment": policy_identity["deployment"]}
         receipt = {"job_id": job_id, "sandbox_id": launch["sandbox_id"], "result": result}
         if not (root / "serving.json").exists():

@@ -7,7 +7,7 @@ import time
 
 from fps_bench.campaign_ledger import LedgerConflict
 from fps_bench.evaluation_contract import canonical, digest, exclusive_write
-from fps_bench.gameworld_grpo import verify_grpo_adapter, verify_parent_adapter, verify_rollout_dataset
+from fps_bench.gameworld_grpo import policy_digest, verify_grpo_adapter, verify_parent_adapter, verify_rollout_dataset
 from fps_bench.gameworld_research import load_policy
 from fps_bench.gameworld_training import GameWorldTrainingRegistry, verify_sft_dataset
 from fps_bench.modal_artifacts import ModalSandboxFiles
@@ -91,7 +91,7 @@ class GameWorldTrainingArtifacts:
         dataset_driver = (manifest["driver_sha256"] if worker["objective"] == "grpo"
                           else manifest["gameworld"]["driver_sha256"])
         if (worker["dataset_sha256"] != authenticated["dataset_sha256"]
-                or worker["policy_sha256"] != digest(canonical(policy_identity))
+                or worker["policy_sha256"] != policy_digest(policy_identity)
                 or worker["driver_sha256"] != dataset_driver):
             raise LedgerConflict("Modal worker plan differs from the authenticated GameWorld dataset")
         if worker["objective"] == "grpo":
@@ -149,7 +149,8 @@ class GameWorldTrainingArtifacts:
         if digest(manifest_data) != worker["dataset_sha256"]:
             raise ValueError("Staged GameWorld dataset manifest differs from admission")
         manifest = json.loads(manifest_data)
-        if digest(await files.read("/input/policy.json")) != worker["policy_sha256"]:
+        staged_policy = json.loads(await files.read("/input/policy.json"))
+        if policy_digest(staged_policy) != worker["policy_sha256"]:
             raise ValueError("Staged GameWorld policy identity differs from admission")
         for name, expected in manifest["files"].items():
             if digest(await files.read("/dataset/" + name, MAX_REMOTE_FILE)) != expected:

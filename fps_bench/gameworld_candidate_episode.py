@@ -14,7 +14,7 @@ import time
 from fps_bench.evaluation_contract import canonical, digest, exclusive_write, split_for_controller, split_units, verify
 from fps_bench.gameworld_baseline import upstream_module
 from fps_bench.gameworld_evaluation import validate_contract
-from fps_bench.gameworld_grpo import validate_policy_identity
+from fps_bench.gameworld_grpo import policy_digest, validate_policy_identity
 from fps_bench.gameworld_suite_episode import catalog_specs, execute, prompt, resolve_action, response_format, semantic_controls, suite_environment
 from fps_bench.qwen_baseline import endpoint, request
 from fps_bench.qwen_protocol import messages
@@ -37,7 +37,7 @@ def validate_inputs(contract, contract_hash, assignment, candidate, policy_ident
         raise ValueError("Candidate episode differs from the frozen task assignment")
     if (candidate.get("contract_hash") != contract_hash or candidate.get("image") != contract["spec"]["provenance"]["image"]
             or candidate.get("driver_sha256") != digest(Path(driver).read_bytes())
-            or candidate.get("policy_sha256") != digest(canonical(policy_identity))
+            or candidate.get("policy_sha256") != policy_digest(policy_identity)
             or candidate.get("model", {}).get("base_model") != policy_identity.get("base_model")
             or candidate.get("model", {}).get("base_revision") != policy_identity.get("base_revision")
             or candidate.get("model", {}).get("adapter_sha256") != policy_identity.get("adapter_sha256")
@@ -126,7 +126,7 @@ async def run(contract, contract_hash, assignment, candidate, policy_identity, o
     manifest = {"schema_version": 1, "created_at": datetime.now(timezone.utc).isoformat(),
                 "contract_sha256": contract_hash, "assignment": assignment,
                 "candidate_sha256": digest(canonical(candidate)),
-                "policy_sha256": digest(canonical(policy_identity)),
+                "policy_sha256": policy_digest(policy_identity),
                 "driver_sha256": candidate["driver_sha256"], "files": files}
     exclusive_write(output / "manifest.json", canonical(manifest), 0o400)
     execution_statuses = [row["execution"]["status"] for row in rows]
@@ -150,7 +150,7 @@ def verify_artifacts(root, contract_hash, assignment, candidate, policy_identity
     if (canonical(manifest) != manifest_data or canonical(result) != result_data
             or manifest.get("contract_sha256") != contract_hash or manifest.get("assignment") != assignment
             or manifest.get("candidate_sha256") != digest(canonical(candidate))
-            or manifest.get("policy_sha256") != digest(canonical(policy_identity))
+            or manifest.get("policy_sha256") != policy_digest(policy_identity)
             or result.get("manifest_sha256") != digest(manifest_data)
             or any(result.get(key) != value for key, value in {**assignment, "candidate": candidate["id"],
                                                                "contract_sha256": contract_hash}.items())):
