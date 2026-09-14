@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import time
 
-from fps_bench.campaign_ledger import BudgetRefused, CampaignLedger, LedgerConflict, positive_integer
+from fps_bench.campaign_ledger import BudgetRefused, CampaignLedger, LedgerConflict, positive_integer, accounting_totals
 from fps_bench.evaluation_contract import canonical, digest, paired_decision, split_for_controller, verify
 
 
@@ -350,13 +350,9 @@ class CampaignController:
             snapshot = self.snapshot()
             if telemetry.campaign != snapshot["budget"]["campaign"]["id"]:
                 raise ValueError("Telemetry campaign identity differs from ledger")
-            reservations = snapshot["budget"]["reservations"]
-            settled = lambda resource: (sum(row["actual"] for row in reservations
-                                            if row["resource"] == resource and row["state"] == "settled")
-                                        + sum(row["actual"] for row in snapshot["budget"]["prior_usage"]
-                                              if row["resource"] == resource))
-            held = lambda resource: sum(row["amount"] for row in reservations
-                                        if row["resource"] == resource and row["state"] == "held")
+            totals = accounting_totals(snapshot["budget"])
+            settled = lambda resource: totals[resource]["observed"]
+            held = lambda resource: totals[resource]["reserved"]
             telemetry.record(event_id, "gameworld-research", {"experiment": "campaign", "phase": "budget", "objective": "accounting"}, {
                 "gameworld_modal_spend": settled("modal_micro_usd") / 1_000_000,
                 "gameworld_modal_reserved": held("modal_micro_usd") / 1_000_000,

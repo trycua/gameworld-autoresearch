@@ -27,6 +27,24 @@ def positive_integer(value, name, allow_zero=False):
         raise ValueError(f"{name} must be an integer >= {0 if allow_zero else 1}")
 
 
+def accounting_totals(snapshot):
+    totals = {}
+    for resource in LIMITS:
+        observed = sum(row["actual"] for row in snapshot["reservations"]
+                       if row["resource"] == resource and row["state"] == "settled")
+        observed += sum(row["actual"] for row in snapshot["prior_usage"] if row["resource"] == resource)
+        reserved = sum(row["amount"] for row in snapshot["reservations"]
+                       if row["resource"] == resource and row["state"] == "held")
+        if resource == "modal_micro_usd":
+            groups = snapshot.get("reconciled_modal_groups", [])
+            observed += sum(row["observed"] for row in groups)
+            reserved += sum(max(0, row["floor"] - row["observed"]) for row in groups)
+        if observed + reserved != snapshot["resources"][resource]["committed"]:
+            raise LedgerConflict("Telemetry accounting does not match committed allowance")
+        totals[resource] = {"observed": observed, "reserved": reserved}
+    return totals
+
+
 class CampaignLedger:
     def __init__(self, path):
         self.path = Path(path)
@@ -99,7 +117,11 @@ class CampaignLedger:
         normal = sum(row["actual"] if row["state"] == "settled" else row["amount"]
                      for row in rows if row["purpose"] == "normal")
         prior = sum(row["actual"] for row in CampaignLedger._prior_rows(connection) if row["resource"] == resource)
-        return committed + prior, normal + prior
+        excess = 0
+        if resource == "modal_micro_usd" and connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='modal_reconciliation_groups'").fetchone():
+            excess = connection.execute("SELECT COALESCE(SUM(excess),0) FROM modal_reconciliation_groups").fetchone()[0]
+        return committed + prior + excess, normal + prior + excess
 
     def reserve(self, reservation_id, resource, amount, expires_at, purpose="normal"):
         with self.transaction() as connection:
@@ -158,6 +180,8 @@ class CampaignLedger:
             if row["actual"] != actual or row["receipt"] != receipt:
                 raise LedgerConflict("Settled usage is immutable")
             return dict(row)
+        if row["state"] != "held":
+            raise LedgerConflict("Reconciled retained allocations cannot be refunded through settlement")
         used = connection.execute("SELECT id FROM reservations WHERE receipt=?", (receipt,)).fetchone()
         if used:
             raise LedgerConflict("Receipt already used for another reservation")
@@ -178,6 +202,10 @@ class CampaignLedger:
         if any(not isinstance(value, str) or not value.strip() for value in (usage_id, receipt)):
             raise ValueError("Stable prior usage identity and evidence receipt required")
         with self.transaction() as connection:
+            if resource == "modal_micro_usd" and connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='modal_reconciliation_rows'").fetchone():
+                if connection.execute("SELECT 1 FROM modal_reconciliation_rows WHERE id=?", (usage_id,)).fetchone():
+                    raise LedgerConflict("Provider row belongs to reconciled reserved work, not prior usage")
             previous = connection.execute("SELECT * FROM prior_usage WHERE id=?", (usage_id,)).fetchone()
             if previous and previous["resource"] != resource:
                 raise LedgerConflict("Prior usage identity reused for another resource")
@@ -219,7 +247,12 @@ class CampaignLedger:
                     "normal_remaining": max(0, min(limits["normal"] - normal, limits["total"] - total)),
                 }
             reservations = [dict(row) for row in connection.execute("SELECT * FROM reservations ORDER BY id")]
+            reconciled = []
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='modal_reconciliation_groups'").fetchone():
+                reconciled = [dict(row) for row in connection.execute(
+                    "SELECT id,floor,observed,excess FROM modal_reconciliation_groups ORDER BY id")]
             return {"campaign": campaign, "resources": resources, "reservations": reservations,
+                    "reconciled_modal_groups": reconciled,
                     "prior_usage": self._prior_rows(connection),
                     "expired_held": [row["id"] for row in reservations
                                      if row["state"] == "held" and row["expires_at"] <= int(time.time())],

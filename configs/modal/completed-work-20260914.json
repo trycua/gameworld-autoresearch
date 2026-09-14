@@ -1,0 +1,80 @@
+{
+  "scope": {
+    "workspace": "cuaai",
+    "environment": "main",
+    "object_ids": [
+      "ap-t8r2bbtsLKNVZP86TmksuX"
+    ],
+    "start": "2026-09-14T00:00:00+00:00",
+    "end": "2026-09-14T03:00:00+00:00"
+  },
+  "resources": [
+    {
+      "reservation_id": "gpu-compat-20260914",
+      "kind": "sandbox",
+      "provider_id": "sb-6BmBrAjmLC6wlIvTDUMFHo",
+      "app_id": "ap-t8r2bbtsLKNVZP86TmksuX",
+      "expected_tags": {
+        "campaign": "gameworld-joint-20260913",
+        "identity": "f0527c9eaa75990c45394b2853e149cefa4d199aeeae3dce096baf221ac4538c",
+        "probe": "gpu-compat-20260914"
+      },
+      "finished_at": "2026-09-14T01:29:19.420094+00:00"
+    },
+    {
+      "reservation_id": "gpu-compat-20260914-b",
+      "kind": "sandbox",
+      "provider_id": "sb-5grJrKnnjT6E6zK6zz6a5Z",
+      "app_id": "ap-t8r2bbtsLKNVZP86TmksuX",
+      "expected_tags": {
+        "campaign": "gameworld-joint-20260913",
+        "identity": "43789997bdf295537ac1df0e237c3df95d3ea7ca17bdd94a84f72200ddc16bec",
+        "probe": "gpu-compat-20260914-b"
+      },
+      "finished_at": "2026-09-14T01:32:30.820060+00:00"
+    },
+    {
+      "reservation_id": "serving-compat-20260914",
+      "kind": "sandbox",
+      "provider_id": "sb-JkfpQyhLMzuBfIAHrMDjEa",
+      "app_id": "ap-t8r2bbtsLKNVZP86TmksuX",
+      "expected_tags": {
+        "campaign": "gameworld-joint-20260913",
+        "identity": "c28bb86862e65c6b652b77da8816b99c0ad22a39a40ff3eef26d29acb30e6d7f",
+        "probe": "serving-compat-20260914"
+      },
+      "finished_at": "2026-09-14T01:59:22.277142+00:00"
+    },
+    {
+      "reservation_id": "baseline-20260914-021314-1b496b",
+      "kind": "sandbox",
+      "provider_id": "sb-9bBtOJJ5uswunntONqjpk1",
+      "app_id": "ap-t8r2bbtsLKNVZP86TmksuX",
+      "expected_tags": {
+        "baseline": "baseline-20260914-021314-1b496b",
+        "campaign": "gameworld-joint-20260913",
+        "identity": "1bfe4c29ece64528229439ab822827f5fcd09a36987bd6909a77eca200a35ada"
+      },
+      "finished_at": "2026-09-14T02:16:42.532403+00:00"
+    },
+    {
+      "reservation_id": "baseline-20260914-021804-a994ae",
+      "kind": "sandbox",
+      "provider_id": "sb-JpegvI5YiLNIDxfMZMSCU6",
+      "app_id": "ap-t8r2bbtsLKNVZP86TmksuX",
+      "expected_tags": {
+        "baseline": "baseline-20260914-021804-a994ae",
+        "campaign": "gameworld-joint-20260913",
+        "identity": "8cfa39d58a37492ac61102ed42e1be58b8b44703c2149e89f1155230ab7cfcff"
+      },
+      "finished_at": "2026-09-14T02:45:08.693841+00:00"
+    },
+    {
+      "reservation_id": "image-import:9b8b8106630c2288f90dab32fbc767ada636f098185368cb6e7bf89eb085024e",
+      "kind": "image_import",
+      "provider_id": "im-DDd0N6Q0E4OoWi4ZH3iPhP",
+      "app_id": "ap-t8r2bbtsLKNVZP86TmksuX",
+      "finished_at": "2026-09-14T01:23:11+00:00"
+    }
+  ]
+}

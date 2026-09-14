@@ -4,7 +4,7 @@
 
 The controller-side ledger is implemented and tested. **Campaign enforcement is
 not complete:** Pi now routes through a local admission relay, but Modal adapters do not yet
-require admission, and no live job billing reconciliation or remote admission service exists. Do not launch an
+require admission across all paths. Completed-work conservative app-hour reconciliation is now implemented; production-loop reconciliation and a remote admission service remain incomplete. Do not launch an
 unattended campaign on the strength of this module alone. Linear: CUA-1167.
 
 `fps_bench/campaign_ledger.py` uses stdlib SQLite with full synchronous commits,
@@ -143,3 +143,12 @@ Admission still needs a freshness/completeness gate, imported LiteLLM history,
 reserved bounds for unreported usage, storage/idle allowances and a watchdog.
 
 Validation: `python3 -m scripts.modal_billing_check`.
+
+## Completed-work conservative reconciliation
+
+`docs/MODAL_RECONCILIATION.md` documents atomic grouped reconciliation that retains
+the full original allocation without claiming final billed cost or issuing refunds.
+`reconciled_retained` allocations continue consuming the cap but no longer act as
+expired active holds after authenticated provider closure. Group/row overlap and
+refund attempts are rejected; upward revisions are retained and overruns freeze
+admission. Controller telemetry includes both observed costs and retained headroom.
