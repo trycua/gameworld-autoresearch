@@ -67,8 +67,41 @@ members per task, eight steps per member, maximum 64 rollout steps. A subsequent
 two-step GPU update is permitted only if the authenticated exported dataset
 contains nonzero reward variance. Source serving terminates before training.
 
-At this checkpoint source serving is starting. No successful dataset, optimizer
-update, adapter, or benchmark improvement is claimed yet.
+The updated-image run reached Qwen inference and completed four stochastic
+trajectories / 32 steps for the first train task. Group registration then failed:
+the initial-state identity hashes differed. Examination of all four retained
+initial states found that only `timestampMs` and `gameTimeMs` differed; the board,
+seed, metrics, debug fields, and remaining state matched. The check hashes the
+entire state, including volatile clock fields. This is a state-identity contract
+defect, not evidence that this task's seeded board differed.
+
+The frozen check was not bypassed, and the rejected artifact was not converted
+into an accepted dataset after the fact. The second task and GPU optimizer update
+were not submitted. No adapter, training loss, or benchmark improvement is
+claimed. The next protocol needs an explicit initial-state equivalence rule
+that distinguishes observation clocks from task-relevant time/state, with tests
+that still reject actual state divergence.
+
+The Fleet cleanup receipt confirms the claim is absent. Authenticated Modal
+checks confirm no running sandboxes in either dedicated app; source serving
+terminated with return code 137. The controller is stopped to prevent further
+paid admission until a new protocol is prepared. The independent watchdog
+remains available for cleanup.
+
+OTel accepted the zero-optimizer-step validation result and accounting metrics:
+`telemetry-export.json` reports logs and metrics sent, no errors, and no pending
+logs. This is not a training-loss or benchmark-success result.
+
+The latest serving allocation retains another $15, making conservative committed
+accounting $366.013141 of the $2,000 cap. Its final closed-hour reconciliation is
+scheduled for **2026-09-14 23:00:05 UTC**, not yet completed at this checkpoint.
+`coordinator-v8/billing-process.json` records the local reconciliation process;
+`billing-2300-result.json` and `billing-2300-telemetry.json` are its expected
+receipts. No GPU or desktop remains running while that billing window closes.
+
+Run evidence is in `vertical-slices/grpo-authenticated-v8/bounded-result.json`,
+`provider-cleanup-verified.json`, `controller-after.json`, and the immutable
+`coordinator-v8/fleet/grpo-rollout-v8-0` artifact bundle.
 
 ## Local checks
 
