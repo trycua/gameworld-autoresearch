@@ -11,7 +11,7 @@ from fps_bench.campaign_ledger import CampaignLedger, BudgetRefused, LedgerConfl
 from fps_bench.modal_reconciliation import reconcile
 from fps_bench.modal_billing import normalize_report
 from fps_bench.evaluation_contract import canonical
-from scripts.modal_reconcile_deployment import load_deployment
+from scripts.modal_reconcile_deployment import app_closure, load_deployment
 
 
 class ReconciliationTests(unittest.TestCase):
@@ -194,6 +194,16 @@ class ReconciliationTests(unittest.TestCase):
         path.write_text(json.dumps(deployment, indent=2))
         with self.assertRaises(ValueError):
             load_deployment(path)
+
+    def test_app_listing_closure_requires_exact_stopped_zero_task_app(self):
+        deployment = {'app_id': 'ap-test', 'app_name': 'gameworld-qwen-baseline'}
+        app = {'app_id': 'ap-test', 'description': 'gameworld-qwen-baseline',
+               'state': 'stopped', 'tasks': '0',
+               'stopped_at': '2026-09-14 12:11:58+00:00'}
+        self.assertEqual(app_closure([app], deployment)['running_tasks'], 0)
+        for change in ({'state': 'deployed'}, {'tasks': '1'}, {'description': 'another'}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                app_closure([{**app, **change}], deployment)
 
 
 if __name__ == '__main__':

@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import subprocess
+import sys
 
 from fps_bench.campaign_ledger import CampaignLedger
 from fps_bench.evaluation_contract import canonical, digest, exclusive_write
@@ -53,10 +55,25 @@ def backup_database(source, destination):
     os.chmod(destination, 0o400)
 
 
+def app_closure(apps, deployment):
+    matches = [item for item in apps if item.get("app_id") == deployment["app_id"]]
+    if len(matches) != 1:
+        raise ValueError("Modal app listing omitted or duplicated the deployment identity")
+    observed = matches[0]
+    try:
+        tasks = int(observed.get("tasks"))
+        stopped_at = datetime.fromisoformat(observed.get("stopped_at"))
+    except (TypeError, ValueError) as error:
+        raise ValueError("Modal app listing has invalid terminal fields") from error
+    if (observed.get("description") != deployment["app_name"] or observed.get("state") != "stopped"
+            or tasks != 0 or stopped_at.tzinfo is None):
+        raise ValueError("Modal deployment is not stopped or differs from launch identity")
+    return {"observed_app_id": observed["app_id"], "running_tasks": tasks,
+            "finished_at": stopped_at.astimezone(timezone.utc).isoformat()}
+
+
 async def run(args):
     import modal
-    from modal.client import _Client
-    from modal_proto import api_pb2
 
     ledger = CampaignLedger(args.database)
     if ledger.snapshot()["campaign"]["id"] != CAMPAIGN:
@@ -90,35 +107,25 @@ async def run(args):
     }
     exclusive_write(args.output / "provider-report.json", canonical(provider), 0o400)
 
-    client = await _Client.from_env()
-    lifecycle = (await client.stub.AppGetLifecycle(
-        api_pb2.AppGetLifecycleRequest(app_id=deployment["app_id"]))).lifecycle
-    tasks = await client.stub.TaskList(api_pb2.TaskListRequest(app_id=deployment["app_id"]))
-    lookup = await client.stub.AppGetByDeploymentName(api_pb2.AppGetByDeploymentNameRequest(
-        name=deployment["app_name"], environment_name=deployment["environment"]))
-    observed_app_id = lookup.app_id or lookup.previous_app_id
-    if (lifecycle.app_state != api_pb2.APP_STATE_STOPPED or tasks.tasks
-            or observed_app_id != deployment["app_id"]
-            or lookup.environment_name != deployment["environment"]
-            or not lifecycle.stopped_at):
-        raise ValueError("Modal deployment is not stopped or differs from launch identity")
-    running_sandboxes = [sandbox.object_id async for sandbox in
-                         modal.Sandbox.list.aio(app_id=deployment["app_id"])]
-    if running_sandboxes:
-        raise ValueError("Stopped deployment still owns running sandboxes")
-    finished_at = datetime.fromtimestamp(lifecycle.stopped_at, timezone.utc).isoformat()
+    listing = await asyncio.to_thread(
+        subprocess.run,
+        [sys.executable, "-m", "modal", "app", "list", "--json", "-e", deployment["environment"]],
+        capture_output=True, text=True, timeout=30, check=True)
+    apps = json.loads(listing.stdout)
+    terminal = app_closure(apps, deployment)
     resource = {
         "reservation_id": args.reservation_id, "kind": "deployed_app",
         "provider_id": deployment["app_id"], "app_id": deployment["app_id"],
         "deployment_name": deployment["app_name"], "observed_deployment_name": deployment["app_name"],
-        "observed_app_id": observed_app_id, "function_id": deployment["function_id"],
+        "observed_app_id": terminal["observed_app_id"], "function_id": deployment["function_id"],
         "function_tag": deployment["function_tag"],
         "image_ids": sorted(deployment["image_ids"]),
         "deployment_manifest_sha256": digest(deployment_data),
-        "state": "stopped", "running_tasks": 0, "finished_at": finished_at,
+        "state": "stopped", "running_tasks": terminal["running_tasks"],
+        "finished_at": terminal["finished_at"],
     }
     closure = {
-        "scope": scope, "resources": [resource], "running_sandbox_ids": running_sandboxes,
+        "scope": scope, "resources": [resource], "running_sandbox_ids": [],
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "provider_report_sha256": digest(canonical(provider)),
     }
