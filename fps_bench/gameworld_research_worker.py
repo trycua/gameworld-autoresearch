@@ -5,16 +5,35 @@ import json
 import os
 from pathlib import Path
 import time
+from urllib import request
 
 from fps_bench.driver_candidate import MAX_PATCH_BYTES, validate_patch
 from fps_bench.evaluation_contract import canonical, digest, exclusive_write
 from fps_bench.gameworld_research import IDENTIFIER, SHA256
+from fps_bench.research_gateway import MAX_BODY, MODELS, NoRedirect
 
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_SOURCE_BUNDLE = 512 * 1024
 RESEARCH_TIMEOUT = 660
 PATCH_TIMEOUT = 360
+RESEARCH_GATEWAY_MODELS = "http://127.0.0.1:8765/v1/models"
+
+
+def gateway_preflight(token):
+    outgoing = request.Request(RESEARCH_GATEWAY_MODELS, headers={
+        "Authorization": f"Bearer {token}", "Accept": "application/json",
+    })
+    opener = request.build_opener(NoRedirect())
+    with opener.open(outgoing, timeout=5) as response:
+        payload = response.read(MAX_BODY + 1)
+    if len(payload) > MAX_BODY:
+        raise ValueError("Research gateway model response exceeds its bound")
+    result = json.loads(payload)
+    models = {row.get("id") for row in result.get("data", []) if isinstance(row, dict)}
+    if models != set(MODELS):
+        raise ValueError("Research gateway model inventory differs from the pinned campaign aliases")
+    return sorted(models)
 
 
 def research_environment(source=None):
@@ -63,6 +82,10 @@ class PiResearchExecutor:
         if process.returncode != 0:
             tail = log_path.read_bytes()[-4000:].decode(errors="replace")
             raise RuntimeError(f"Pi {kind} worker failed ({process.returncode}): {tail}")
+
+    async def preflight(self):
+        return await asyncio.to_thread(
+            gateway_preflight, self.environment["GAMEWORLD_RESEARCH_TOKEN"])
 
 
 class GameWorldResearchWorker:
@@ -311,6 +334,8 @@ class GameWorldResearchWorker:
     async def propose(self):
         if not self.can_propose():
             return None
+        if hasattr(self.executor, "preflight"):
+            await self.executor.preflight()
         context = self.proposal_context()
         owner = f"round-{context['round']}-{context['recommended_track']}"
         attempt_id, directory = self._begin("proposal", owner, context)
@@ -333,6 +358,8 @@ class GameWorldResearchWorker:
                     "error_type": type(error).__name__}
 
     async def materialize_driver_patch(self, action):
+        if hasattr(self.executor, "preflight"):
+            await self.executor.preflight()
         workflow = self.coordinator.workflow(action["workflow"])
         context = self.patch_context(workflow)
         attempt_id, directory = self._begin(

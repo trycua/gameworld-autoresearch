@@ -1,19 +1,30 @@
 """Offline checks for campaign-integrated Pi research materialization."""
 
 import asyncio
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+import threading
 import unittest
+from unittest.mock import patch
 
-from fps_bench.gameworld_research_worker import GameWorldResearchWorker, research_environment
+from fps_bench.gameworld_research_worker import GameWorldResearchWorker, gateway_preflight, research_environment
+from fps_bench.research_gateway import MODELS
 import scripts.gameworld_coordinator_check as coordinator_fixtures
 
 
 class Executor:
-    def __init__(self, proposal=None, fail=False):
+    def __init__(self, proposal=None, fail=False, preflight_fail=False):
         self.proposal = proposal
         self.fail = fail
+        self.preflight_fail = preflight_fail
         self.calls = []
+        self.preflights = 0
+
+    async def preflight(self):
+        self.preflights += 1
+        if self.preflight_fail:
+            raise ConnectionError("synthetic gateway unavailable")
 
     async def run(self, kind, context_path, output_path, timeout):
         context = json.loads(Path(context_path).read_bytes())
@@ -46,6 +57,34 @@ class ResearchWorkerTests(unittest.TestCase):
         return GameWorldResearchWorker(
             self.coordinator, self.fixture.root / "coordinator/research", executor, catalog)
 
+    def test_gateway_preflight_authenticates_exact_model_inventory(self):
+        requests = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                requests.append((self.path, self.headers.get("Authorization")))
+                payload = json.dumps({"data": [{"id": model} for model in MODELS]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_port}/v1/models"
+            with patch("fps_bench.gameworld_research_worker.RESEARCH_GATEWAY_MODELS", url):
+                self.assertEqual(gateway_preflight("r" * 32), sorted(MODELS))
+            self.assertEqual(requests, [("/v1/models", "Bearer " + "r" * 32)])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
     def test_research_environment_drops_provider_credentials(self):
         environment = research_environment({
             "PATH": "/bin", "GAMEWORLD_RESEARCH_TOKEN": "r" * 32,
@@ -66,6 +105,7 @@ class ResearchWorkerTests(unittest.TestCase):
         self.assertEqual(event["proposal"], proposal["id"])
         self.assertEqual(self.coordinator.supervisor.next()["id"], proposal["id"])
         self.assertEqual(executor.calls[0][1]["recommended_track"], "driver")
+        self.assertEqual(executor.preflights, 1)
         with self.coordinator.controller.ledger.transaction() as connection:
             attempt = dict(connection.execute("SELECT * FROM gameworld_research_attempts").fetchone())
         self.assertEqual(attempt["state"], "complete")
@@ -82,6 +122,15 @@ class ResearchWorkerTests(unittest.TestCase):
         self.assertEqual(workflow["state"], "building")
         self.assertIn("patch_sha256", workflow["details"])
         self.assertEqual(executor.calls[0][0], "driver-patch")
+        self.assertEqual(executor.preflights, 1)
+
+    def test_gateway_preflight_failure_does_not_consume_research_attempt(self):
+        worker = self.worker(Executor(preflight_fail=True))
+        with self.assertRaises(ConnectionError):
+            self.run_async(worker.propose())
+        with self.coordinator.controller.ledger.transaction() as connection:
+            count = connection.execute("SELECT COUNT(*) FROM gameworld_research_attempts").fetchone()[0]
+        self.assertEqual(count, 0)
 
     def test_worker_attaches_only_catalogued_sft_source(self):
         proposal = self.fixture.fixture.model_proposal("worker-sft")

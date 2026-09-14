@@ -132,6 +132,11 @@ registers its immutable bytes. Driver proposals then use Sol to produce only an
 ASCII unified diff over the approved source files; the Fleet worker still performs
 `git apply --check`, rebuilds the bundled driver and runs every input contract.
 
+Before proposal synthesis or patch generation starts, the trusted worker
+authenticates to the loopback relay, refuses redirects, and requires the exact four
+pinned model aliases. A relay outage therefore stops the runner without consuming
+one of the campaign's durable research-failure attempts.
+
 The subprocess receives `GAMEWORLD_RESEARCH_TOKEN` and an optional
 `GAMEWORLD_SEARXNG_URL`, but not Fleet, Modal, Qwen or GitHub credentials. Each
 proposal and patch attempt has a durable context, output hash and terminal state
