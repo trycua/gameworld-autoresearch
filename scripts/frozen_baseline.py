@@ -86,6 +86,16 @@ async def shell(sandbox, command):
     return result.stdout
 
 
+async def release_claim(handle, pool_name, name, backend=None, timeout_seconds=120):
+    backend = backend or FleetSDKBackend()
+    await asyncio.wait_for(handle.release(), 30)
+    deadline = time.monotonic() + timeout_seconds
+    while await asyncio.wait_for(backend.find_claim(pool_name, name), 30) is not None:
+        if time.monotonic() >= deadline:
+            raise TimeoutError('Claim release unconfirmed; cleanup obligation retained')
+        await asyncio.sleep(2)
+
+
 async def collect(args):
     import modal
     from cua_sandbox import Pool
@@ -267,9 +277,7 @@ async def collect(args):
                 errors.append({'gpu_cleanup': type(error).__name__})
         for name, handle in claims.items():
             try:
-                await asyncio.wait_for(handle.release(), 120)
-                if await FleetSDKBackend().find_claim(metadata['pool'], name) is not None:
-                    raise RuntimeError('Claim release unconfirmed')
+                await release_claim(handle, metadata['pool'], name)
             except Exception as error:
                 errors.append({'claim': name, 'cleanup_error': type(error).__name__})
         exclusive_write(args.output / 'cleanup.json', canonical({'errors': errors, 'at': time.time(), 'billing_reconciled': False}))

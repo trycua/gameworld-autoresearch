@@ -6,8 +6,9 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import AsyncMock, patch
 
-from frozen_baseline import archive_files, extract_artifacts, verify_episode, ANCHOR, DRIVER
+from frozen_baseline import archive_files, extract_artifacts, verify_episode, release_claim, ANCHOR, DRIVER
 from fps_bench.evaluation_contract import canonical, digest
 
 
@@ -75,6 +76,22 @@ class ArtifactTests(unittest.TestCase):
         contract = self.episode()
         with self.assertRaisesRegex(ValueError, 'provenance'):
             verify_episode(self.root, {'seed': 43}, contract)
+
+
+class ClaimReleaseTests(unittest.IsolatedAsyncioTestCase):
+    async def test_asynchronous_deletion_is_polled(self):
+        handle, backend = AsyncMock(), AsyncMock()
+        backend.find_claim.side_effect = [{'phase': 'Bound'}, None]
+        with patch('frozen_baseline.asyncio.sleep', new_callable=AsyncMock):
+            await release_claim(handle, 'pool', 'claim', backend)
+        handle.release.assert_awaited_once()
+        self.assertEqual(backend.find_claim.await_count, 2)
+
+    async def test_unresolved_deletion_remains_failure(self):
+        handle, backend = AsyncMock(), AsyncMock()
+        backend.find_claim.return_value = {'phase': 'Bound'}
+        with self.assertRaisesRegex(TimeoutError, 'obligation retained'):
+            await release_claim(handle, 'pool', 'claim', backend, timeout_seconds=0)
 
 
 if __name__ == '__main__':

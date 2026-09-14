@@ -72,8 +72,10 @@ No promotion, private confirmation, or sealed evaluation is performed.
 After trusted replay, hash the report and export using
 `scripts/frozen_baseline_telemetry.py --report PATH --report-sha256 HASH --outbox PATH`.
 Use a Python environment containing the existing telemetry dependencies. The
-exporter records per-episode success, duration and completion metrics with the
-original manifest completion time. Verify backend ingestion independently;
+exporter records one complete candidate-level aggregate (success, median duration,
+progress and completion metrics), timestamped at the last episode completion.
+Incomplete reports are not exported; episode identity stays in retained artifacts
+rather than becoming a high-cardinality experiment label. Verify backend ingestion independently;
 HTTP acceptance alone is not dashboard/result verification.
 
 ## Remaining launch boundaries
@@ -83,3 +85,9 @@ private-use leases, a separately deployed watchdog, or model/driver candidate
 promotion. The model cache is shared/read-only rather than newly content-attested.
 All-in billing reconciliation and the full upstream LiteLLM usage envelope remain
 separate launch gates. A completed baseline alone does not make the campaign ready.
+
+Complete reports can be retained outside candidate workspaces with
+`scripts/frozen_baseline_register.py --report PATH --report-sha256 HASH --destination PATH`.
+The registrar rereads all artifact hashes and writes a final registration receipt
+only after every copy succeeds. See `docs/results/2026-09-14-frozen-gameworld-baseline.md`
+for the measured baseline and reconciled cleanup evidence.

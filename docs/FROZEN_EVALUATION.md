@@ -2,10 +2,12 @@
 
 ## Status and custody
 
-The first controller-side contract and seed sets are frozen, and a 16-episode
-baseline assignment plan exists. **No multi-seed baseline has run.** Paid dispatch,
-artifact ingestion, independent result verification, OS isolation and persistent
-confirmation-use enforcement remain coordinator work. Linear: CUA-1168/CUA-1171.
+The controller-side contract and seed sets are frozen. The 16-episode development
+baseline completed on September 14, 2026: **0/16 successes**, with all 960 steps
+replayed by the trusted controller and 2080 artifacts registered in external
+read-only custody. See `docs/results/2026-09-14-frozen-gameworld-baseline.md`.
+Production coordinator integration, OS isolation and persistent confirmation-use
+enforcement remain required. Linear: CUA-1168/CUA-1171.
 
 Suite: `gameworld-2048-cua-qwen-v2-pilot-1`.
 Contract SHA-256: `f2a1161156fa185ba9ad696b8bfc05369420cdde065ebd9fe7ae367faf38d5f9`.
@@ -32,7 +34,8 @@ The frozen source matches the current code at initial freeze time. Future evalua
 changes must create a new contract/version; never overwrite this custody directory
 or silently recompute its anchor. Driver changes do not alter frozen evaluator
 files. The original GHCR image does not yet contain these new modules: verified
-controller snapshot staging or a rebuilt pinned image is required before execution.
+controller snapshot staging was used for the completed baseline; production
+coordinator staging still needs integration.
 
 ## Protocol and splits
 

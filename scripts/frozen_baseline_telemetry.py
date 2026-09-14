@@ -21,7 +21,13 @@ def main():
     report = json.loads(raw)
     if report['contract_sha256'] != 'f2a1161156fa185ba9ad696b8bfc05369420cdde065ebd9fe7ae367faf38d5f9':
         raise ValueError('Wrong frozen contract')
-    telemetry = ResearchTelemetry(args.outbox, 'gameworld-joint-20260913')
+    baseline = report['baseline']
+    if baseline['status'] != 'complete':
+        print(json.dumps({'status': 'incomplete_report', 'exported': False}))
+        return
+    if len(report['rows']) != 16 or baseline['episodes'] != 16:
+        raise ValueError('Complete frozen baseline requires all 16 episodes')
+    timestamps = []
     for row in report['rows']:
         if (row['verification'] != 'frozen evaluator replay on trusted controller'
                 or row['candidate'] != 'baseline' or row['split'] != 'development'):
@@ -33,10 +39,14 @@ def main():
         stamp = datetime.fromisoformat(json.loads(manifest_raw)['finished_at'])
         if stamp.tzinfo is None:
             raise ValueError('Timezone required')
-        telemetry.record('baseline-' + row['episode_id'], 'gameworld-eval',
-            {'experiment': 'baseline-' + row['episode_id'], 'phase': 'eval', 'split': 'development', 'objective': 'tile32'},
-            {'gameworld_eval_success_rate': float(row['success']), 'gameworld_eval_completed_episodes': 1,
-             'gameworld_eval_seconds': row['seconds']}, timestamp_ns=int(stamp.timestamp() * 1_000_000_000))
+        timestamps.append(int(stamp.timestamp() * 1_000_000_000))
+    telemetry = ResearchTelemetry(args.outbox, 'gameworld-joint-20260913')
+    telemetry.record('baseline-qwen-v1-complete', 'gameworld-eval',
+        {'experiment': 'baseline-qwen-v1', 'phase': 'eval', 'split': 'development', 'objective': 'tile32'},
+        {'gameworld_eval_success_rate': baseline['success_rate'], 'gameworld_eval_completed_episodes': 16,
+         'gameworld_eval_failed_episodes': 0,
+         'gameworld_eval_mean_progress': sum(row['evaluation']['metrics']['progress_current'] for row in report['rows']) / 16,
+         'gameworld_eval_seconds': baseline['median_seconds']}, timestamp_ns=max(timestamps))
     print(json.dumps(telemetry.flush()))
 
 
