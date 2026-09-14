@@ -10,12 +10,14 @@ from urllib.parse import urlsplit
 
 from fps_bench.campaign_ledger import LedgerConflict
 from fps_bench.evaluation_contract import canonical, digest, exclusive_write
+from fps_bench.gameworld_candidate_episode import verify_artifacts as verify_evaluation_artifacts
 from fps_bench.gameworld_grpo import validate_policy_identity, verify_rollout_dataset
 from fps_bench.gameworld_research import load_policy
 
 
 MAX_DRIVER_ARCHIVE = 128 * 1024 * 1024
 MAX_ROLLOUT_ARCHIVE = 640 * 1024 * 1024
+MAX_EVALUATION_ARCHIVE = 640 * 1024 * 1024
 
 
 def extract_output_archive(data, output, maximum):
@@ -312,4 +314,62 @@ class GameWorldFleetExecutor:
                       "seconds": worker["seconds"]}
         self.controller.record_result(job_id, result, digest(canonical(receipt)))
         await self.finish_provider(job_id, sandbox, "rollout")
+        return {"result": result, "artifacts": receipt}
+
+    async def evaluate(self, job_id, policy_identity_path, qwen_environment, driver_binary=None):
+        job, specification, candidate = self.context_for(job_id, "evaluation")
+        assignment = specification["assignment"]
+        identity_bytes = Path(policy_identity_path).read_bytes()
+        identity = json.loads(identity_bytes)
+        endpoint = qwen_environment.get("QWEN_BASE_URL", "").rstrip("/")
+        parsed = urlsplit(endpoint)
+        if (canonical(identity) != identity_bytes or digest(identity_bytes) != candidate["policy_sha256"]
+                or parsed.scheme != "https" or parsed.username or parsed.password
+                or digest(endpoint.encode()) != identity.get("deployment", {}).get("endpoint_sha256")
+                or len(qwen_environment.get("QWEN_API_KEY", "")) < 32):
+            raise ValueError("Evaluation serving identity or credentials differ from the candidate")
+        validate_policy_identity(identity, self.policy)
+        driver = b""
+        selected_driver = "/usr/local/bin/cua-driver"
+        staged = {"contract.json": self.controller.contract_path.read_bytes(),
+                  "assignment.json": canonical(assignment), "candidate.json": canonical(candidate),
+                  "policy.json": identity_bytes}
+        if driver_binary is not None:
+            driver = Path(driver_binary).read_bytes()
+            if digest(driver) != candidate["driver_sha256"]:
+                raise ValueError("Evaluation driver binary differs from the candidate")
+            staged["cua-driver"] = driver
+        elif candidate["driver_sha256"] != self.controller.contract["spec"].get("baseline_driver_sha256"):
+            raise ValueError("A nonbaseline evaluation driver must be staged explicitly")
+        env = "\n".join(f"export {name}={shlex.quote(qwen_environment[name])}"
+                         for name in ("QWEN_API_KEY", "QWEN_BASE_URL")) + "\n"
+        staged["qwen.env"] = env.encode()
+
+        def command(root):
+            driver_path = root + "/cua-driver" if driver else selected_driver
+            setup = f"chmod 500 {shlex.quote(driver_path)} && " if driver else ""
+            return (
+                f"chmod 600 {shlex.quote(root + '/qwen.env')} && . {shlex.quote(root + '/qwen.env')} && "
+                f"rm -f {shlex.quote(root + '/qwen.env')} && export QWEN_API_KEY QWEN_BASE_URL DISPLAY=:1 "
+                f"GAMEWORLD_HOME=/opt/GameWorld && {setup}"
+                f"/opt/gameworld-venv/bin/python -m fps_bench.gameworld_candidate_episode "
+                f"--contract {shlex.quote(root + '/contract.json')} "
+                f"--contract-sha256 {shlex.quote(self.controller.contract_hash)} "
+                f"--assignment {shlex.quote(root + '/assignment.json')} "
+                f"--candidate {shlex.quote(root + '/candidate.json')} "
+                f"--policy-identity {shlex.quote(root + '/policy.json')} "
+                f"--output {shlex.quote(root + '/output')} --driver {shlex.quote(driver_path)}"
+            )
+
+        sandbox, root, receipt = await self.execute(
+            job_id, "evaluation", staged, command, MAX_EVALUATION_ARCHIVE)
+        provider = json.loads((root / "provider-result.json").read_bytes())
+        if provider != {"returncode": 0}:
+            result = {**assignment, "candidate": job["candidate"], "contract_sha256": self.controller.contract_hash,
+                      "status": "failed", "error_type": "EvaluationWorkerError"}
+        else:
+            result = verify_evaluation_artifacts(
+                root, self.controller.contract_hash, assignment, candidate, identity)
+        self.controller.record_result(job_id, result, digest(canonical(receipt)))
+        await self.finish_provider(job_id, sandbox, "evaluation")
         return {"result": result, "artifacts": receipt}

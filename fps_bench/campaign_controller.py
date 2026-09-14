@@ -15,7 +15,7 @@ from fps_bench.evaluation_contract import (
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 JOB_GROUPS = {"evaluation": "desktop", "rollout": "desktop", "driver_build": "desktop",
-              "training": "training", "research": "research"}
+              "training": "training", "serving": "training", "research": "research"}
 GROUP_LIMITS = {"desktop": 2, "training": 1, "research": 2}
 ACTIVE_PROVIDER_STATES = {"reserved", "dispatching", "running", "cleanup_pending"}
 
@@ -122,6 +122,9 @@ class CampaignController:
                     raise LedgerConflict("Baseline is registered exactly once, without an adapter")
                 if model["served_model"] != self.contract["episode_template"]["served_model"]:
                     raise ValueError("Baseline serving identity differs from frozen model")
+                if (task_contract and self.contract["spec"].get("baseline_driver_sha256") is not None
+                        and manifest["driver_sha256"] != self.contract["spec"]["baseline_driver_sha256"]):
+                    raise ValueError("Baseline driver differs from the frozen GameWorld image")
                 state = "champion"
             else:
                 if manifest["parent"] != settings["champion"]:
@@ -209,6 +212,24 @@ class CampaignController:
                     or not SHA256.fullmatch(assignment["driver_sha256"])
                     or type(assignment["steps"]) is not int or not 1 <= assignment["steps"] <= 32):
                 raise ValueError("GameWorld training requires a bounded authenticated task dataset")
+        if kind == "serving":
+            generation = assignment.get("generation") if isinstance(assignment, dict) else None
+            if (not task_contract
+                    or set(assignment) != {"training_job", "adapter_sha256", "served_model", "hypothesis", "generation"}
+                    or not IDENTIFIER.fullmatch(assignment.get("training_job", ""))
+                    or not SHA256.fullmatch(assignment.get("adapter_sha256", ""))
+                    or not isinstance(assignment.get("served_model"), str)
+                    or not IDENTIFIER.fullmatch(assignment["served_model"])
+                    or not isinstance(assignment.get("hypothesis"), str)
+                    or not assignment["hypothesis"].strip() or len(assignment["hypothesis"]) > 4000
+                    or not isinstance(generation, dict)
+                    or set(generation) != {"temperature", "top_p", "max_tokens", "response_format"}
+                    or type(generation["temperature"]) not in (int, float)
+                    or not 0 < generation["temperature"] <= 2
+                    or type(generation["top_p"]) not in (int, float) or not 0 < generation["top_p"] <= 1
+                    or type(generation["max_tokens"]) is not int or not 1 <= generation["max_tokens"] <= 512
+                    or generation["response_format"] != "unconstrained-json-text"):
+                raise ValueError("GameWorld serving requires an immutable adapter and rollout policy")
         if kind == "rollout":
             required = {"split", "task_id", "game", "task", "seed", "repeat", "group_id", "members",
                         "max_steps", "policy_sha256", "driver_sha256"}
@@ -253,6 +274,13 @@ class CampaignController:
                 if (assignment["driver_sha256"] != candidate_manifest["driver_sha256"]
                         or assignment["policy_sha256"] != candidate_manifest.get("policy_sha256")):
                     raise ValueError("GameWorld data generation identity differs from its source candidate")
+            if kind == "serving":
+                training = self._job(connection, assignment["training_job"])
+                if (training["kind"] != "training" or training["candidate"] != candidate
+                        or training["state"] not in ("billing_pending", "cleaned") or not training["result"]
+                        or json.loads(training["result"])["result"].get("adapter_manifest_sha256")
+                        != assignment["adapter_sha256"]):
+                    raise LedgerConflict("Serving requires a completed, provider-cleaned training job from this parent")
             group = JOB_GROUPS[kind]
             placeholders = ",".join("?" for _ in ACTIVE_PROVIDER_STATES)
             count = connection.execute(

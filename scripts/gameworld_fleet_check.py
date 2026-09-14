@@ -215,6 +215,74 @@ class FleetExecutorTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 extract_output_archive(data.getvalue(), self.home / f"unsafe-{kind}", 1024)
 
+    def test_candidate_evaluation_is_bound_to_task_model_and_driver(self):
+        source = fixtures.GameWorldControllerTests()
+        source.setUp()
+        self.addCleanup(source.doCleanups)
+        policy, _ = load_policy()
+        driver = b"candidate-driver"
+        driver_path = self.home / "driver"
+        driver_path.write_bytes(driver)
+        endpoint = "https://evaluation.example/v1"
+        identity = {"base_model": policy["model"]["base_model"],
+                    "base_revision": policy["model"]["base_revision"], "adapter_sha256": None,
+                    "served_model": "qwen-baseline",
+                    "deployment": {"app_id": "ap-Test", "function_id": "fu-Test", "image_id": "im-Test",
+                                   "endpoint_sha256": digest(endpoint.encode())},
+                    "generation": {"temperature": 0.8, "top_p": 0.95, "max_tokens": 128,
+                                   "response_format": "unconstrained-json-text"}}
+        policy_path = self.home / "evaluation-policy.json"
+        policy_path.write_bytes(canonical(identity))
+        contract = copy.deepcopy(source.contract)
+        contract["episode_template"].update(model=identity["base_model"], revision=identity["base_revision"],
+                                            served_model=identity["served_model"])
+        contract["spec"]["baseline_driver_sha256"] = digest(driver)
+        contract_path = self.home / "evaluation-contract.json"
+        contract_path.write_bytes(canonical(contract))
+        contract_hash = digest(canonical(contract))
+        controller = CampaignController(self.home / "evaluation.sqlite", contract_path, contract_hash)
+        controller.initialize("evaluation-controller")
+        candidate = copy.deepcopy(source.baseline)
+        candidate.update(contract_hash=contract_hash, driver_sha256=digest(driver),
+                         policy_sha256=digest(policy_path.read_bytes()))
+        candidate["model"] = {"base_model": identity["base_model"], "base_revision": identity["base_revision"],
+                              "processor_revision": identity["base_revision"], "adapter_sha256": None,
+                              "served_model": identity["served_model"]}
+        controller.register_candidate(candidate)
+        task = contract["public_splits"]["development"]["tasks"][0]
+        assignment = {"split": "development", "task_id": task["id"], "game": task["game"],
+                      "task": task["task"], "seed": task["seed"], "repeat": 0}
+        controller.admit_job("evaluation-one", "baseline", "evaluation", assignment,
+                             {"modal_micro_usd": 100}, 600)
+        fixture = self.home / "evaluation-fixture"
+        fixture.mkdir()
+        summary = {"status": "complete", "success": False, "steps": 1, "invalid_actions": 0,
+                   "driver_errors": 0, "progress": 0.25, "seconds": 1.0,
+                   "usage": {"prompt_tokens": 10, "completion_tokens": 2}, "evaluation": {}}
+        trajectory = canonical({"step": 0})
+        (fixture / "summary.json").write_bytes(canonical(summary))
+        (fixture / "trajectory.jsonl").write_bytes(trajectory)
+        files = {"summary.json": digest(canonical(summary)), "trajectory.jsonl": digest(trajectory)}
+        manifest = {"schema_version": 1, "contract_sha256": contract_hash, "assignment": assignment,
+                    "candidate_sha256": digest(canonical(candidate)),
+                    "policy_sha256": digest(canonical(identity)), "driver_sha256": digest(driver),
+                    "files": files}
+        (fixture / "manifest.json").write_bytes(canonical(manifest))
+        result = {**assignment, "candidate": "baseline", "contract_sha256": contract_hash,
+                  "status": "complete", "success": False, "steps": 1, "invalid_actions": 0,
+                  "driver_errors": 0, "execution_status": "executed", "progress": 0.25,
+                  "seconds": 1.0, "usage": summary["usage"],
+                  "manifest_sha256": digest(canonical(manifest)), "execution_statuses": ["executed"]}
+        (fixture / "result.json").write_bytes(canonical(result))
+        (fixture / "provider-result.json").write_bytes(canonical({"returncode": 0}))
+        executor = GameWorldFleetExecutor(
+            controller, FakeLifecycle(controller), self.home / "evaluation-artifacts", FakeBackend(fixture))
+        completed = self.run_async(executor.evaluate(
+            "evaluation-one", policy_path,
+            {"QWEN_BASE_URL": endpoint, "QWEN_API_KEY": "x" * 32}, driver_path))
+        self.assertEqual(completed["result"]["task_id"], task["id"])
+        self.assertEqual(controller.snapshot()["jobs"][0]["state"], "billing_pending")
+
 
 if __name__ == "__main__":
     unittest.main()

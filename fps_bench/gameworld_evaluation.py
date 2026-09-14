@@ -7,12 +7,14 @@ import re
 
 from fps_bench.evaluation_contract import canonical, digest, exclusive_write, safe_file, split_units, verify
 from fps_bench.gameworld_research import DEFAULT_CATALOG, DEFAULT_POLICY, load_baseline, load_policy
+from fps_bench.gameworld_suite_episode import DRIVER as BASELINE_DRIVER_SHA256
 
 
 SOURCE_FILES = (
     "fps_bench/campaign_controller.py",
     "fps_bench/evaluation_contract.py",
     "fps_bench/gameworld_evaluation.py",
+    "fps_bench/gameworld_candidate_episode.py",
     "fps_bench/gameworld_grpo.py",
     "fps_bench/gameworld_research.py",
     "fps_bench/gameworld_rollout.py",
@@ -65,6 +67,7 @@ def build_contract(policy, context, baseline, image, source_hashes, seed=42):
             "catalog_manifest_sha256": context["catalog_manifest_sha256"],
             "policy_sha256": context["policy_sha256"],
             "baseline_sha256": baseline["baseline_sha256"],
+            "baseline_driver_sha256": BASELINE_DRIVER_SHA256,
             "provenance": {
                 "image": image,
                 "gameworld_revision": context["manifest"]["gameworld_revision"],
@@ -99,6 +102,7 @@ def validate_contract(contract, expected_hash, private_path=None):
     spec = contract.get("spec", {})
     if (spec.get("assignment_kind") != "gameworld-task" or spec.get("rules") != RULES
             or not IMAGE.fullmatch(spec.get("provenance", {}).get("image", ""))
+            or not re.fullmatch(r"[0-9a-f]{64}", spec.get("baseline_driver_sha256", ""))
             or set(contract.get("public_splits", {})) != {"train", "development"}
             or set(contract.get("source_hashes", {})) != set(SOURCE_FILES)):
         raise ValueError("GameWorld evaluation contract schema changed")

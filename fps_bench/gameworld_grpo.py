@@ -168,10 +168,14 @@ def validate_policy_identity(expected_policy, policy):
             or not 1 <= len(expected_policy["served_model"]) <= 128):
         raise ValueError("Rollout serving policy identity is incomplete")
     deployment = expected_policy["deployment"]
-    if (not isinstance(deployment, dict)
-            or set(deployment) != {"app_id", "function_id", "image_id", "endpoint_sha256"}
+    function = isinstance(deployment, dict) and set(deployment) == {
+        "app_id", "function_id", "image_id", "endpoint_sha256"}
+    sandbox = isinstance(deployment, dict) and set(deployment) == {
+        "app_id", "sandbox_id", "image_id", "endpoint_sha256"}
+    if (not (function or sandbox)
             or not re.fullmatch(r"ap-[A-Za-z0-9]+", deployment["app_id"])
-            or not re.fullmatch(r"fu-[A-Za-z0-9]+", deployment["function_id"])
+            or function and not re.fullmatch(r"fu-[A-Za-z0-9]+", deployment["function_id"])
+            or sandbox and not re.fullmatch(r"sb-[A-Za-z0-9]+", deployment["sandbox_id"])
             or not re.fullmatch(r"im-[A-Za-z0-9]+", deployment["image_id"])
             or not SHA256.fullmatch(deployment["endpoint_sha256"])):
         raise ValueError("Rollout deployment identity is incomplete")
