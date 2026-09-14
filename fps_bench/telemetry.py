@@ -20,6 +20,10 @@ METRICS = {
     "gameworld_modal_reserved": "USD", "gameworld_litellm_tokens": "", "gameworld_litellm_reserved_tokens": "",
     "gameworld_active_claims": "", "gameworld_active_training_jobs": "",
     "gameworld_desktop_slots_reserved": "", "gameworld_training_slots_reserved": "",
+    "gameworld_research_round": "", "gameworld_candidate_qualified": "",
+    "gameworld_grpo_reward_mean": "", "gameworld_grpo_reward_std": "",
+    "gameworld_train_policy_loss": "", "gameworld_train_reference_kl": "",
+    "gameworld_train_clip_fraction": "1", "gameworld_train_gradient_norm": "",
 }
 SERVICES = {"gameworld-research", "gameworld-eval", "gameworld-train"}
 ATTRIBUTES = {"experiment", "phase", "split", "task", "change_class", "outcome", "objective"}
@@ -93,10 +97,11 @@ class ResearchTelemetry:
         for name, value in values.items():
             if type(value) not in (int, float) or not math.isfinite(value):
                 raise ValueError("Metrics must be finite scalars")
-            if name != "gameworld_train_loss" and value < 0:
-                raise ValueError("Only training loss may be negative")
-            if name in ("gameworld_eval_success_rate", "gameworld_eval_mean_progress") and value > 1:
-                raise ValueError("Evaluation ratios must be in [0,1]")
+            if name not in ("gameworld_train_loss", "gameworld_train_policy_loss") and value < 0:
+                raise ValueError("Only training objectives may be negative")
+            if name in ("gameworld_eval_success_rate", "gameworld_eval_mean_progress",
+                        "gameworld_train_clip_fraction") and value > 1:
+                raise ValueError("Ratio metrics must be in [0,1]")
         if step is not None and (type(step) is not int or step < 0):
             raise ValueError("Optimizer step must be a nonnegative integer")
         if timestamp_ns is not None and (type(timestamp_ns) is not int or not 0 < timestamp_ns <= time.time_ns()):

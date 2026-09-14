@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from fps_bench.campaign_ledger import BudgetRefused, CampaignLedger, LedgerConflict, LIMITS
 from fps_bench.evaluation_contract import canonical, digest
 from fps_bench.gameworld_suite_catalog import load as load_catalog
+from fps_bench.telemetry import ResearchTelemetry
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -305,10 +306,12 @@ def validate_proposal(proposal, policy, context, baseline):
     if len({reference["url"] for reference in proposal["references"]}) != len(proposal["references"]):
         raise ValueError("Proposal repeats a research source")
     budget = proposal["budget"]
-    if (not isinstance(budget, dict) or set(budget) != {"modal_micro_usd", "litellm_tokens", "desktop_episodes"}
+    if (not isinstance(budget, dict)
+            or set(budget) != {"modal_micro_usd", "litellm_tokens", "desktop_episodes", "timeout_seconds"}
             or any(type(value) is not int or value < 0 for value in budget.values())
             or not 1 <= budget["desktop_episodes"] <= 136
             or budget["litellm_tokens"] == 0
+            or not 60 <= budget["timeout_seconds"] <= 1800
             or budget["modal_micro_usd"] > policy["limits"]["modal_micro_usd_normal"]
             or budget["litellm_tokens"] > policy["limits"]["litellm_tokens"]):
         raise ValueError("Proposal budget is outside campaign bounds")
@@ -359,10 +362,35 @@ def validate_proposal(proposal, policy, context, baseline):
 
 
 class GameWorldResearchSupervisor:
-    def __init__(self, database, baseline_output, policy_path=DEFAULT_POLICY, catalog_path=DEFAULT_CATALOG):
+    def __init__(self, database, baseline_output, policy_path=DEFAULT_POLICY, catalog_path=DEFAULT_CATALOG,
+                 telemetry_path=None):
         self.ledger = CampaignLedger(database)
         self.policy, self.context = load_policy(policy_path, catalog_path)
         self.baseline = load_baseline(baseline_output, catalog_path, self.context["catalog_manifest_sha256"])
+        self.telemetry_path = telemetry_path
+        self.telemetry = None
+
+    @staticmethod
+    def _migrate_actions(connection):
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(gameworld_actions)")}
+        additions = {
+            "deadline": "INTEGER NOT NULL DEFAULT 0",
+            "reservations": "TEXT NOT NULL DEFAULT '{}'",
+            "provider_id": "TEXT",
+            "cleanup_receipt": "TEXT",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                connection.execute(f"ALTER TABLE gameworld_actions ADD COLUMN {name} {definition}")
+        now = int(time.time())
+        connection.execute("UPDATE gameworld_actions SET deadline=? WHERE deadline=0", (now,))
+        connection.execute("UPDATE gameworld_actions SET state='dispatching' WHERE state='running' AND provider_id IS NULL")
+        connection.execute("UPDATE gameworld_actions SET state='cleanup_pending' WHERE state='complete'")
+
+    def _ensure_telemetry(self):
+        if self.telemetry is None and self.telemetry_path is not None:
+            campaign = self.ledger.snapshot()["campaign"]["id"]
+            self.telemetry = ResearchTelemetry(self.telemetry_path, campaign)
 
     def initialize(self, campaign):
         self.ledger.initialize(campaign)
@@ -380,25 +408,40 @@ class GameWorldResearchSupervisor:
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS gameworld_actions ("
                 "id TEXT PRIMARY KEY, hypothesis TEXT NOT NULL REFERENCES gameworld_hypotheses(id), "
-                "kind TEXT NOT NULL, state TEXT NOT NULL, result TEXT)"
+                "kind TEXT NOT NULL, deadline INTEGER NOT NULL, reservations TEXT NOT NULL, state TEXT NOT NULL, "
+                "provider_id TEXT, result TEXT, cleanup_receipt TEXT)"
             )
+            self._migrate_actions(connection)
             current = connection.execute("SELECT * FROM gameworld_research").fetchone()
             if current:
                 if (current["policy_sha256"] != self.context["policy_sha256"]
                         or current["baseline_sha256"] != self.baseline["baseline_sha256"]):
                     raise LedgerConflict("GameWorld supervisor identity changed")
-                return
-            now = int(time.time())
-            connection.execute(
-                "INSERT INTO gameworld_research VALUES (1,?,?,?,?,?)",
-                (self.context["policy_sha256"], self.baseline["baseline_sha256"], now,
-                 now + self.policy["limits"]["campaign_seconds"], "running"),
-            )
-            self.ledger._event(connection, "gameworld_research_initialized", {
-                "policy_sha256": self.context["policy_sha256"],
-                "baseline_sha256": self.baseline["baseline_sha256"],
-                "catalog_manifest_sha256": self.context["catalog_manifest_sha256"],
-            })
+            else:
+                now = int(time.time())
+                connection.execute(
+                    "INSERT INTO gameworld_research VALUES (1,?,?,?,?,?)",
+                    (self.context["policy_sha256"], self.baseline["baseline_sha256"], now,
+                     now + self.policy["limits"]["campaign_seconds"], "running"),
+                )
+                self.ledger._event(connection, "gameworld_research_initialized", {
+                    "policy_sha256": self.context["policy_sha256"],
+                    "baseline_sha256": self.baseline["baseline_sha256"],
+                    "catalog_manifest_sha256": self.context["catalog_manifest_sha256"],
+                })
+        self._ensure_telemetry()
+
+    def _emit(self, event_id, values, outcome):
+        if self.telemetry_path is None:
+            return None
+        try:
+            self._ensure_telemetry()
+            self.telemetry.record(event_id, "gameworld-research",
+                                  {"experiment": "joint-supervisor", "phase": "research", "task": "all",
+                                   "change_class": "joint", "outcome": outcome}, values)
+            return self.telemetry.flush()
+        except Exception as error:
+            return {"metrics": False, "logs": False, "errors": [{"type": type(error).__name__}]}
 
     def _settings(self, connection, admission=False):
         row = connection.execute("SELECT * FROM gameworld_research").fetchone()
@@ -424,6 +467,10 @@ class GameWorldResearchSupervisor:
             maximum = self.policy["candidate_policy"]["maximum_candidates"]
             if connection.execute("SELECT COUNT(*) FROM gameworld_hypotheses").fetchone()[0] >= maximum:
                 raise BudgetRefused("GameWorld candidate limit reached")
+            committed, _ = self.ledger._usage(connection, "litellm_tokens")
+            limit = connection.execute("SELECT total FROM limits WHERE resource='litellm_tokens'").fetchone()[0]
+            if committed + proposal["budget"]["litellm_tokens"] > limit:
+                raise BudgetRefused("Proposal exceeds remaining LiteLLM allowance")
             round_id = connection.execute("SELECT COALESCE(MAX(round),0)+1 FROM gameworld_hypotheses").fetchone()[0]
             connection.execute(
                 "INSERT INTO gameworld_hypotheses VALUES (?,?,?,?,?,'queued')",
@@ -433,7 +480,9 @@ class GameWorldResearchSupervisor:
                 "id": proposal["id"], "round": round_id, "track": proposal["track"],
                 "manifest_sha256": payload_hash,
             })
-            return dict(connection.execute("SELECT * FROM gameworld_hypotheses WHERE id=?", (proposal["id"],)).fetchone())
+            result = dict(connection.execute("SELECT * FROM gameworld_hypotheses WHERE id=?", (proposal["id"],)).fetchone())
+        self._emit(f"research-round-{round_id}", {"gameworld_research_round": round_id}, "queued")
+        return result
 
     @staticmethod
     def _next_row(connection):
@@ -472,13 +521,44 @@ class GameWorldResearchSupervisor:
             if selected is None or selected["id"] != hypothesis:
                 raise LedgerConflict("Only the supervisor-selected hypothesis may start")
             kind = "driver_build" if selected["track"] == "driver" else "training"
-            connection.execute("INSERT INTO gameworld_actions VALUES (?,?,?,'running',NULL)",
-                               (action_id, hypothesis, kind))
+            proposal = json.loads(selected["manifest"])
+            now = int(time.time())
+            deadline = now + proposal["budget"]["timeout_seconds"]
+            settings = self._settings(connection)
+            if deadline + 300 > settings["deadline"]:
+                raise BudgetRefused("Action leaves insufficient supervisor cleanup time")
+            reservations = {}
+            if proposal["budget"]["modal_micro_usd"]:
+                reservation_id = f"gameworld:{action_id}:modal"
+                self.ledger._reserve_in_transaction(
+                    connection, reservation_id, "modal_micro_usd",
+                    proposal["budget"]["modal_micro_usd"], deadline)
+                reservations["modal_micro_usd"] = reservation_id
+            connection.execute("INSERT INTO gameworld_actions VALUES (?,?,?,?,?,'dispatching',NULL,NULL,NULL)",
+                               (action_id, hypothesis, kind, deadline, canonical(reservations).decode()))
             connection.execute("UPDATE gameworld_hypotheses SET state='running' WHERE id=?", (hypothesis,))
             self.ledger._event(connection, "gameworld_action_started", {
                 "id": action_id, "hypothesis": hypothesis, "kind": kind,
             })
             return dict(connection.execute("SELECT * FROM gameworld_actions WHERE id=?", (action_id,)).fetchone())
+
+    def provider_started(self, action_id, provider_id):
+        if not isinstance(provider_id, str) or not provider_id.strip() or len(provider_id) > 256:
+            raise ValueError("Bounded provider identity required")
+        with self.ledger.transaction() as connection:
+            self._settings(connection)
+            action = connection.execute("SELECT * FROM gameworld_actions WHERE id=?", (action_id,)).fetchone()
+            if action is None:
+                raise LedgerConflict("Unknown GameWorld action")
+            if action["state"] == "running" and action["provider_id"] == provider_id:
+                return
+            if action["state"] != "dispatching" or action["provider_id"] is not None:
+                raise LedgerConflict("Provider acknowledgement differs from action state")
+            connection.execute("UPDATE gameworld_actions SET state='running',provider_id=? WHERE id=?",
+                               (provider_id, action_id))
+            self.ledger._event(connection, "gameworld_provider_started", {
+                "id": action_id, "provider_id": provider_id,
+            })
 
     def finish(self, action_id, result):
         required = {"candidate_id", "qualified", "artifact_sha256", "metrics"}
@@ -494,19 +574,60 @@ class GameWorldResearchSupervisor:
             action = connection.execute("SELECT * FROM gameworld_actions WHERE id=?", (action_id,)).fetchone()
             if action is None:
                 raise LedgerConflict("Unknown GameWorld action")
-            if action["state"] == "complete":
+            if action["state"] in ("cleanup_pending", "cleaned"):
                 if action["result"] != payload:
                     raise LedgerConflict("Action result is immutable")
                 return
             if action["state"] != "running":
                 raise LedgerConflict("Only a running action can finish")
-            state = "qualified" if result["qualified"] else "rejected"
-            connection.execute("UPDATE gameworld_actions SET state='complete',result=? WHERE id=?", (payload, action_id))
-            connection.execute("UPDATE gameworld_hypotheses SET state=? WHERE id=?", (state, action["hypothesis"]))
+            connection.execute("UPDATE gameworld_actions SET state='cleanup_pending',result=? WHERE id=?",
+                               (payload, action_id))
             self.ledger._event(connection, "gameworld_action_finished", {
                 "id": action_id, "hypothesis": action["hypothesis"], "candidate": result["candidate_id"],
                 "qualified": result["qualified"], "artifact_sha256": result["artifact_sha256"],
             })
+
+    def cleanup_confirmed(self, action_id, receipt):
+        if not isinstance(receipt, str) or not receipt.strip() or len(receipt) > 1000:
+            raise ValueError("Bounded cleanup receipt required")
+        with self.ledger.transaction() as connection:
+            self._settings(connection)
+            action = connection.execute("SELECT * FROM gameworld_actions WHERE id=?", (action_id,)).fetchone()
+            if action is None:
+                raise LedgerConflict("Unknown GameWorld action")
+            if action["state"] == "cleaned":
+                if action["cleanup_receipt"] != receipt:
+                    raise LedgerConflict("Cleanup receipt is immutable")
+                return
+            if action["state"] != "cleanup_pending" or action["result"] is None:
+                raise LedgerConflict("Only a completed provider action can be cleaned")
+            result = json.loads(action["result"])
+            hypothesis_state = "qualified" if result["qualified"] else "rejected"
+            connection.execute("UPDATE gameworld_actions SET state='cleaned',cleanup_receipt=? WHERE id=?",
+                               (receipt, action_id))
+            connection.execute("UPDATE gameworld_hypotheses SET state=? WHERE id=?",
+                               (hypothesis_state, action["hypothesis"]))
+            self.ledger._event(connection, "gameworld_cleanup_confirmed", {
+                "id": action_id, "receipt": receipt, "billing_reconciled": False,
+            })
+        self._emit(f"candidate-{result['candidate_id']}", {
+            "gameworld_candidate_qualified": int(result["qualified"]),
+        }, hypothesis_state)
+
+    def recovery_actions(self):
+        with self.ledger.transaction() as connection:
+            self._settings(connection)
+            rows = connection.execute(
+                "SELECT id,hypothesis,kind,state,provider_id,deadline,reservations FROM gameworld_actions "
+                "WHERE state!='cleaned' ORDER BY id"
+            ).fetchall()
+            return [{**dict(row), "reservations": json.loads(row["reservations"]),
+                     "action": {
+                         "dispatching": "reconcile-provider-submission",
+                         "running": "inspect-export-and-request-cleanup",
+                         "cleanup_pending": "release-provider-and-record-receipt",
+                     }.get(row["state"], "inspect")}
+                    for row in rows]
 
     def snapshot(self):
         with self.ledger.transaction() as connection:
@@ -515,8 +636,11 @@ class GameWorldResearchSupervisor:
                 "SELECT id,round,track,manifest_sha256,state FROM gameworld_hypotheses ORDER BY round"
             )]
             actions = [dict(row) for row in connection.execute(
-                "SELECT id,hypothesis,kind,state FROM gameworld_actions ORDER BY id"
+                "SELECT id,hypothesis,kind,deadline,reservations,state,provider_id,cleanup_receipt "
+                "FROM gameworld_actions ORDER BY id"
             )]
+            for action in actions:
+                action["reservations"] = json.loads(action["reservations"])
             qualified = {}
             for track in TRACKS:
                 row = connection.execute(
@@ -536,6 +660,7 @@ class GameWorldResearchSupervisor:
             "baseline": {key: self.baseline[key] for key in ("baseline_sha256", "totals")},
             "hypotheses": hypotheses,
             "actions": actions,
+            "recovery": self.recovery_actions(),
             "next": None if selected is None else selected["id"],
             "qualified_tracks": qualified,
             "joint_ready": all(qualified.values()),
@@ -545,7 +670,7 @@ class GameWorldResearchSupervisor:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=["initialize", "status", "register", "next", "begin", "finish"])
+    parser.add_argument("operation", choices=["initialize", "status", "register", "next", "begin", "provider", "finish", "cleanup", "recovery"])
     parser.add_argument("--database", type=Path, required=True)
     parser.add_argument("--baseline", type=Path, required=True)
     parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
@@ -555,8 +680,11 @@ def main():
     parser.add_argument("--hypothesis")
     parser.add_argument("--action")
     parser.add_argument("--result", type=Path)
+    parser.add_argument("--provider-id")
+    parser.add_argument("--receipt")
+    parser.add_argument("--telemetry", type=Path)
     args = parser.parse_args()
-    supervisor = GameWorldResearchSupervisor(args.database, args.baseline, args.policy, args.catalog)
+    supervisor = GameWorldResearchSupervisor(args.database, args.baseline, args.policy, args.catalog, args.telemetry)
     if args.operation == "initialize":
         if not args.campaign:
             parser.error("initialize requires --campaign")
@@ -577,6 +705,18 @@ def main():
             parser.error("finish requires --action and --result")
         supervisor.finish(args.action, _json(args.result))
         value = supervisor.snapshot()
+    elif args.operation == "provider":
+        if not args.action or not args.provider_id:
+            parser.error("provider requires --action and --provider-id")
+        supervisor.provider_started(args.action, args.provider_id)
+        value = supervisor.snapshot()
+    elif args.operation == "cleanup":
+        if not args.action or not args.receipt:
+            parser.error("cleanup requires --action and --receipt")
+        supervisor.cleanup_confirmed(args.action, args.receipt)
+        value = supervisor.snapshot()
+    elif args.operation == "recovery":
+        value = supervisor.recovery_actions()
     else:
         value = supervisor.snapshot()
     print(json.dumps(value, indent=2, sort_keys=True))

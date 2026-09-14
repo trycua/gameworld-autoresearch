@@ -50,8 +50,14 @@ class TelemetryTests(unittest.TestCase):
 
     def test_negative_policy_loss_is_preserved(self):
         self.record(loss=-0.25)
+        self.telemetry.record("policy-step", "gameworld-train", {"experiment": "smoke", "phase": "train"},
+                              {"gameworld_train_policy_loss": -0.5,
+                               "gameworld_train_clip_fraction": 0.25})
         self.assertTrue(self.telemetry.flush()["metrics"])
         self.assertEqual(self.telemetry.snapshot()[0]["values"]["gameworld_train_loss"], -0.25)
+        with self.assertRaises(ValueError):
+            self.telemetry.record("bad-clip", "gameworld-train", {"experiment": "smoke"},
+                                  {"gameworld_train_clip_fraction": 1.01})
 
     def test_event_identity_is_immutable_and_deduplicated(self):
         self.assertTrue(self.record())

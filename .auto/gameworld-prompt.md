@@ -56,7 +56,8 @@ Return exactly one JSON object matching this shape:
   "budget": {
     "modal_micro_usd": 0,
     "litellm_tokens": 200000,
-    "desktop_episodes": 2
+    "desktop_episodes": 2,
+    "timeout_seconds": 900
   }
 }
 ```

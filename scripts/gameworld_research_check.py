@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
 
@@ -108,7 +109,8 @@ class SupervisorTests(unittest.TestCase):
                 "contract_tests": ["build", "focus", "held-keys", "key-release", "mouse-delivery"],
                 "evaluation_tasks": ["01_game-1--01_03"],
             },
-            "budget": {"modal_micro_usd": 0, "litellm_tokens": 1000, "desktop_episodes": 2},
+            "budget": {"modal_micro_usd": 0, "litellm_tokens": 1000, "desktop_episodes": 2,
+                       "timeout_seconds": 600},
         }
 
     def model_proposal(self, identity="model-grpo"):
@@ -124,13 +126,16 @@ class SupervisorTests(unittest.TestCase):
                 "evaluation_tasks": ["02_game-2--02_03"],
                 "rollouts_per_task": 2, "max_trajectory_steps": 4, "optimizer_steps": 2,
             },
-            "budget": {"modal_micro_usd": 2_000_000, "litellm_tokens": 1000, "desktop_episodes": 2},
+            "budget": {"modal_micro_usd": 2_000_000, "litellm_tokens": 1000, "desktop_episodes": 2,
+                       "timeout_seconds": 600},
         }
 
     def finish(self, hypothesis, action, qualified=True):
         self.supervisor.begin(hypothesis, action)
+        self.supervisor.provider_started(action, "provider-" + action)
         self.supervisor.finish(action, {"candidate_id": hypothesis + "-candidate", "qualified": qualified,
                                         "artifact_sha256": "a" * 64, "metrics": {"success_rate": 0.1}})
+        self.supervisor.cleanup_confirmed(action, "cleanup-" + action)
 
     def test_baseline_imports_all_tasks_and_signals(self):
         baseline = load_baseline(self.baseline, self.catalog, self.catalog_hash)
@@ -190,6 +195,41 @@ class SupervisorTests(unittest.TestCase):
         first = self.supervisor.begin("driver-input", "driver-action")
         self.supervisor.register(self.model_proposal())
         self.assertEqual(self.supervisor.begin("driver-input", "driver-action"), first)
+
+    def test_provider_cleanup_and_recovery_are_explicit(self):
+        self.supervisor.register(self.model_proposal())
+        action = self.supervisor.begin("model-grpo", "model-action")
+        self.assertEqual(action["state"], "dispatching")
+        self.assertEqual(set(json.loads(action["reservations"])), {"modal_micro_usd"})
+        self.assertEqual(self.supervisor.recovery_actions()[0]["action"], "reconcile-provider-submission")
+        self.supervisor.provider_started("model-action", "sb-provider")
+        self.assertEqual(self.supervisor.recovery_actions()[0]["action"], "inspect-export-and-request-cleanup")
+        self.supervisor.finish("model-action", {"candidate_id": "model-candidate", "qualified": True,
+                                                "artifact_sha256": "a" * 64, "metrics": {}})
+        self.assertEqual(self.supervisor.recovery_actions()[0]["action"], "release-provider-and-record-receipt")
+        self.supervisor.cleanup_confirmed("model-action", "terminated-sb-provider")
+        self.assertEqual(self.supervisor.recovery_actions(), [])
+        hold = self.supervisor.snapshot()["budget"]["reservations"][0]
+        self.assertEqual(hold["state"], "held")
+
+    def test_reinitialize_migrates_old_actions_and_reattaches_telemetry(self):
+        telemetry = self.root / "telemetry.sqlite"
+        reopened = GameWorldResearchSupervisor(
+            self.root / "campaign.sqlite", self.baseline, self.policy, self.catalog, telemetry)
+        reopened.initialize("test-gameworld")
+        self.assertIsNotNone(reopened.telemetry)
+        with sqlite3.connect(self.root / "campaign.sqlite") as connection:
+            connection.execute("DROP TABLE gameworld_actions")
+            connection.execute("CREATE TABLE gameworld_actions ("
+                               "id TEXT PRIMARY KEY, hypothesis TEXT NOT NULL, kind TEXT NOT NULL, "
+                               "state TEXT NOT NULL, result TEXT)")
+            connection.execute("INSERT INTO gameworld_actions VALUES ('old-action','old-hypothesis',"
+                               "'driver_build','running',NULL)")
+        reopened.initialize("test-gameworld")
+        action = reopened.recovery_actions()[0]
+        self.assertEqual(action["state"], "dispatching")
+        self.assertEqual(action["reservations"], {})
+        self.assertGreater(action["deadline"], 0)
 
     def test_duplicate_evidence_and_references_are_rejected(self):
         proposal = self.driver_proposal()

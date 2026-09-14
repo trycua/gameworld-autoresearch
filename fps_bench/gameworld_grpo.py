@@ -437,7 +437,11 @@ def train_grpo_dataset(root, dataset_hash, *, policy, context, expected_policy, 
             try:
                 telemetry.record(f"grpo:{experiment}:{step + 1}", "gameworld-train",
                                  {"experiment": experiment, "phase": "train", "split": "train", "objective": "grpo"},
-                                 {"gameworld_train_loss": total_loss, "gameworld_train_step": step + 1},
+                                 {"gameworld_train_loss": total_loss, "gameworld_train_step": step + 1,
+                                  "gameworld_train_policy_loss": metrics["policy_loss"],
+                                  "gameworld_train_reference_kl": metrics["reference_kl"],
+                                  "gameworld_train_clip_fraction": metrics["clip_fraction"],
+                                  "gameworld_train_gradient_norm": float(gradient_norm)},
                                  step=step + 1, timestamp_ns=row["timestamp_ns"])
             except Exception as error:
                 telemetry_errors.append({"step": step + 1, "error_type": type(error).__name__})
