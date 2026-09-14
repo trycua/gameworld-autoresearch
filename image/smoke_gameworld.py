@@ -1,6 +1,7 @@
 """Verify the real GameWorld renderer and native driver key delivery without Qwen."""
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -8,11 +9,21 @@ import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fps_bench.gameworld_baseline import game_environment
+from fps_bench.gameworld_suite_catalog import GAMEWORLD_REVISION, GAMES_REVISION
+from fps_bench.gameworld_suite_episode import DRIVER
 from fps_bench.qwen_baseline import ROOT
 
 
 async def main():
     config = json.loads((ROOT / "configs/qwen-gameworld-baseline.json").read_text())
+    driver_path = Path("/usr/local/bin/cua-driver")
+    driver_sha256 = hashlib.sha256(driver_path.read_bytes()).hexdigest()
+    provenance = json.loads((ROOT / "image-source.json").read_text())
+    assert driver_sha256 == DRIVER
+    assert provenance["schema_version"] == 2
+    assert provenance["artifacts"] == {str(driver_path): driver_sha256}
+    assert provenance["upstream"] == {
+        "gameworld_revision": GAMEWORLD_REVISION, "games_revision": GAMES_REVISION}
     with tempfile.TemporaryDirectory(prefix="gameworld-smoke-") as directory:
         async with game_environment(config, Path(directory), "/usr/local/bin/cua-driver") as (page, call, target):
             await page.evaluate("""() => {
