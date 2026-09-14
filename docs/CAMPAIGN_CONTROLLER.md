@@ -55,8 +55,9 @@ query the provider using the durable job identity and never blindly resubmit.
 Do not interpret a transient provider lookup miss as proof that no job was created.
 
 Training assignments require a hashed dataset manifest and only registered train
-seeds. This structural guard does not inspect dataset contents; a verified dataset
-builder/loader must check the actual examples before a real training job. Private
+seeds. The production Modal lifecycle additionally requires controller-registered
+rollout receipts and revalidates dataset/custody bytes before dispatch; see
+`AUTHENTICATED_TRAINING.md`. Structural job admission alone cannot launch training. Private
 split jobs are denied pending durable access leases. Public development assignment
 is unique per candidate/seed/repetition; hidden retries cannot be substituted.
 

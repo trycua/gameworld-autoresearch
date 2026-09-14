@@ -3,7 +3,7 @@
 import asyncio
 from datetime import datetime, timezone
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, patch
 
 import scripts.campaign_controller_check as fixtures
 from fps_bench.campaign_ledger import BudgetRefused, LedgerConflict
@@ -75,6 +75,9 @@ class ModalTrainingTests(unittest.TestCase):
         self.fixture.admit(amount=10_000_000)
         self.backend = FakeModal()
         self.lifecycle = ModalTrainingLifecycle(self.controller, self.backend)
+        registry_check = patch.object(self.lifecycle.training_registry, "authenticate", return_value={})
+        registry_check.start()
+        self.addCleanup(registry_check.stop)
         self.plan = self.run_async(self.lifecycle.prepare("job-one", workspace="test", app="test-app",
                                                           environment="gameworld-test", environment_id="en-test", image_id="im-prebuilt"))
 

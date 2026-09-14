@@ -64,6 +64,7 @@ class TrainingArtifacts:
         return job, launch, plan, files
 
     async def stage(self, job_id, root):
+        self.lifecycle.training_registry.authenticate(job_id)
         job, launch, plan, files = await self.context(job_id)
         assignment = plan["assignment"]
         manifest, _ = verify_dataset(root, assignment["dataset_sha256"], plan["contract_sha256"])

@@ -9,6 +9,7 @@ import time
 
 from fps_bench.campaign_ledger import BudgetRefused, LedgerConflict
 from fps_bench.evaluation_contract import canonical, digest
+from fps_bench.training_registry import TrainingRegistry
 from fps_bench.modal_environment import inspect_environment
 from fps_bench.modal_scope import check_scope, inspect_app_scope
 
@@ -111,6 +112,7 @@ class ModalTrainingLifecycle:
     def __init__(self, controller, backend=None):
         self.controller = controller
         self.backend = backend or ModalSDKBackend()
+        self.training_registry = TrainingRegistry(controller)
         with controller.ledger.transaction() as connection:
             connection.execute("CREATE TABLE IF NOT EXISTS modal_training_transfers "
                                "(job_id TEXT PRIMARY KEY REFERENCES jobs(id), staging_receipt TEXT, export_receipt TEXT)")
@@ -136,6 +138,7 @@ class ModalTrainingLifecycle:
             raise ValueError("Explicit Modal workspace/app/environment required")
         if not isinstance(environment_id, str) or not environment_id.startswith("en-"):
             raise ValueError("Pinned dedicated environment ID required")
+        self.training_registry.authenticate(job_id)
         scope = {"workspace": workspace, "environment": environment, "environment_id": environment_id,
                  "app": app, "app_id": app_id, "isolation_policy": isolation_policy}
         guard = await check_scope(self.backend, scope)
@@ -185,6 +188,7 @@ class ModalTrainingLifecycle:
         return observed["id"]
 
     async def start(self, job_id):
+        self.training_registry.authenticate(job_id)
         job, launch, plan = self.stored(job_id)
         if job["state"] not in ("reserved", "dispatching", "running"):
             raise LedgerConflict("Job cannot start a Modal sandbox")
@@ -206,6 +210,7 @@ class ModalTrainingLifecycle:
         return self.acknowledge(job_id, observed)
 
     async def run_worker(self, job_id):
+        self.training_registry.authenticate(job_id)
         job, launch, plan = self.stored(job_id)
         if job["state"] != "running" or not launch["sandbox_id"]:
             raise LedgerConflict("Only an acknowledged sandbox can run the training worker")
