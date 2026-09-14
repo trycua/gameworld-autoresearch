@@ -124,6 +124,11 @@ class ServingTests(unittest.TestCase):
         rates = self.run_async(self.backend.prices("test"))
         quote = compute_reservation(rates["rates"], 600, rates["checked_at"])
         self.assertGreater(quote["required_reservation_micro_usd"], 1_000_000)
+        full = compute_reservation(rates["rates"], 10800, rates["checked_at"])
+        self.assertGreater(full["required_reservation_micro_usd"], quote["required_reservation_micro_usd"])
+        self.assertLessEqual(full["required_reservation_micro_usd"], 15_000_000)
+        with self.assertRaises(ValueError):
+            compute_reservation(rates["rates"], 10801, rates["checked_at"])
         with self.assertRaises(ValueError):
             compute_reservation(rates["rates"], 60, rates["checked_at"])
 

@@ -27,8 +27,8 @@ The coordinator currently persists and validates these paths:
 
 Fleet build, rollout and evaluation jobs do not reserve Modal dollars. A distinct
 controller-admitted serving job owns each source-policy or candidate GPU lifetime
-and later reconciles that allocation. Source serving has a fixed `$10` hold and
-one-hour maximum, stops before training, and restarts for protected driver
+and later reconciles that allocation. Source serving has a fixed `$15` hold and
+three-hour maximum, stops before training, and restarts for protected driver
 evaluations. Candidate vLLM advertises both the actual parent policy and child LoRA
 name on one GPU; when the parent is already adapted, both immutable LoRA artifacts
 are staged and the raw base model is not mislabeled as the champion. Serving uses

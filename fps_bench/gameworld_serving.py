@@ -32,8 +32,8 @@ KNOWN_CREATE_REFUSALS = {
 
 
 def compute_reservation(rates, seconds, checked_at):
-    if type(seconds) is not int or not 300 <= seconds <= 3600:
-        raise ValueError("Serving sandbox lifetime must be 300..3600 seconds")
+    if type(seconds) is not int or not 300 <= seconds <= 10800:
+        raise ValueError("Serving sandbox lifetime must be 300..10800 seconds")
     age = time.time() - datetime.fromisoformat(checked_at.replace("Z", "+00:00")).timestamp()
     if not 0 <= age <= 300:
         raise ValueError("Modal serving price snapshot is stale or future-dated")

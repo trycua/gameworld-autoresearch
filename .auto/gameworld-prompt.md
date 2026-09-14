@@ -69,7 +69,7 @@ For a model proposal, `experiment` must contain `kind`, `objective`,
 `max_trajectory_steps`, `optimizer_steps` and `sft_source_id`. GRPO requires two to eight fresh
 rollouts per task. SFT uses one. Its budget must split `modal_micro_usd` exactly
 between positive `modal_training_micro_usd` and `modal_serving_micro_usd`
-reservations. Serving must meet the trusted policy's minimum one-hour hold.
+reservations. Serving must meet the trusted policy's minimum three-hour hold.
 GRPO sets `sft_source_id` to null; SFT must select one source ID
 offered by the trusted campaign context. Do not claim that a proposal was executed.
 Every candidate evaluation must list all 34 development tasks; the trusted

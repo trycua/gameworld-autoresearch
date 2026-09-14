@@ -159,9 +159,9 @@ class CoordinatorTests(unittest.TestCase):
         self.start_baseline_serving(proposal["id"])
         self.assertEqual(len(self.coordinator._items(proposal["id"], "rollout")), 1)
         self.assertEqual(self.coordinator.workflow(proposal["id"])["details"]["modal_allocation"], {
-            "training_micro_usd": 5_000_000, "serving_micro_usd": 10_000_000,
+            "training_micro_usd": 5_000_000, "serving_micro_usd": 15_000_000,
         })
-        self.coordinator.allocate_model_budget("model-action", 5_000_000, 10_000_000)
+        self.coordinator.allocate_model_budget("model-action", 5_000_000, 15_000_000)
         rollout = self.coordinator.admit_ready(1)[0]["job_id"]
         artifact = self.root / "coordinator/fleet" / rollout
         artifact.mkdir(parents=True)
@@ -200,7 +200,7 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(len(items), 136)
         self.assertEqual({item["candidate"] for item in items}, {"baseline", served_model})
         self.assertEqual(self.coordinator.controller.snapshot()["budget"]["resources"]["modal_micro_usd"]["committed"],
-                         15_000_000)
+                         20_000_000)
 
     def test_next_model_generation_serves_the_adapted_champion(self):
         baseline = self.coordinator._candidate("baseline")
@@ -233,7 +233,7 @@ class CoordinatorTests(unittest.TestCase):
         self.coordinator.start_next("sft-action")
         self.assertEqual(self.coordinator._items(proposal["id"]), [])
         self.assertEqual(self.coordinator.required_actions()[0]["action"], "attach-authenticated-sft-dataset")
-        self.coordinator.allocate_model_budget("sft-action", 5_000_000, 10_000_000)
+        self.coordinator.allocate_model_budget("sft-action", 5_000_000, 15_000_000)
         task = proposal["experiment"]["training_tasks"][0]
         dataset = self.root / "sft-dataset"
         (dataset / "images").mkdir(parents=True)

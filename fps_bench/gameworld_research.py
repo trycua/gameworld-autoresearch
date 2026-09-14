@@ -127,9 +127,9 @@ def load_policy(path=DEFAULT_POLICY, catalog_path=DEFAULT_CATALOG):
         "litellm_tokens": LIMITS["litellm_tokens"][0],
         "desktop_concurrency": 2,
         "training_concurrency": 1,
-        "baseline_serving_micro_usd": 10_000_000,
-        "minimum_serving_micro_usd": 10_000_000,
-        "serving_seconds": 3600,
+        "baseline_serving_micro_usd": 15_000_000,
+        "minimum_serving_micro_usd": 15_000_000,
+        "serving_seconds": 10800,
         "campaign_seconds": 21600,
     }
     if limits != expected_limits:
