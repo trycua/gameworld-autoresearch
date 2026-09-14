@@ -90,6 +90,18 @@ the trusted runner; researchers receive only the source ID, task IDs and hashes.
 The authenticated SFT registry re-verifies the selected dataset before any Modal
 job is admitted.
 
+`scripts/gameworld_sft_baseline_export.py` prepares an optional self-imitation
+source from executed, positive-progress first steps in the existing train split.
+It checks original archive and screenshot hashes, checks public prompt specs
+against the catalog, excludes evaluator state from model inputs, and writes
+immutable dataset/source/provenance files plus a `sources.json` catalog. Pass
+`--baseline`, `--gameworld` (the pinned upstream catalog checkout), `--contract`,
+`--contract-sha256` and a fresh `--output`. Supply the resulting catalog through
+`--sft-source-catalog`; SFT proposals must select its entire task set. These are
+base-model outputs, not expert demonstrations, and positive progress may be
+automatic rather than caused by the action. They are a measured warm-start
+hypothesis, not evidence of policy improvement.
+
 Every runner cycle also checks completed Modal training and serving jobs for a
 fully closed billing-hour window. It authenticates workspace billing, verifies no
 sandbox remains active in the dedicated apps, rechecks each sandbox's terminal

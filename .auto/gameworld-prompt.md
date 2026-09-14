@@ -71,6 +71,8 @@ rollouts per task. SFT uses one. Its budget must split `modal_micro_usd` exactly
 between positive `modal_training_micro_usd` and `modal_serving_micro_usd`
 reservations. Serving must meet the trusted policy's minimum three-hour hold.
 GRPO sets `sft_source_id` to null; SFT must select one source ID
-offered by the trusted campaign context. Do not claim that a proposal was executed.
+offered by the trusted campaign context and exactly all tasks in that immutable
+source. A subset requires a separately prepared source; do not silently narrow
+the dataset. Do not claim that a proposal was executed.
 Every candidate evaluation must list all 34 development tasks; the trusted
 controller runs two paired repeats per game and assigns a fresh comparison ID.

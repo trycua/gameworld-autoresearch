@@ -123,6 +123,9 @@ export function assembleProposal(core, context, sources, retrievedAt) {
     if (core.training_tasks.some((task) => !covered.has(task))) {
       throw new Error('SFT proposal selected tasks without an authenticated source.');
     }
+    if (core.training_tasks.length !== covered.size || new Set(core.training_tasks).size !== covered.size) {
+      throw new Error('SFT proposal must select every task in its immutable source.');
+    }
   } else if (core.sft_source_id !== null) {
     throw new Error('GRPO proposal selected an SFT source.');
   }

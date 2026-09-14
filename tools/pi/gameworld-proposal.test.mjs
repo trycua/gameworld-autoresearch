@@ -79,3 +79,17 @@ test('driver patch schema forbids extra output fields', () => {
   assert.equal(patchSchema().additionalProperties, false);
   assert.deepEqual(patchSchema().required, ['patch', 'rationale']);
 });
+
+test('SFT scope must exactly match its immutable dataset', () => {
+  const tasks = ['01_game--01_01', '01_game--01_02'];
+  const modelContext = { ...context, recommended_track: 'model',
+    sft_sources: [{ id: 'approved-source', tasks }] };
+  const core = { ...common, objective: 'sft', training_tasks: tasks,
+    rollouts_per_task: 1, max_trajectory_steps: 4, optimizer_steps: 2,
+    sft_source_id: 'approved-source', modal_training_micro_usd: 8000000,
+    modal_serving_micro_usd: 10000000 };
+  assert.throws(() => assembleProposal({ ...core, training_tasks: tasks.slice(0, 1) },
+    modelContext, sources, '2026-09-14T00:00:00.000Z'), /every task/);
+  const proposal = assembleProposal(core, modelContext, sources, '2026-09-14T00:00:00.000Z');
+  assert.deepEqual(proposal.experiment.training_tasks, tasks);
+});
