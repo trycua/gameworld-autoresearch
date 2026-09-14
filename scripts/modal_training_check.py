@@ -125,7 +125,7 @@ class ModalTrainingTests(unittest.TestCase):
         receipt = self.run_async(self.lifecycle.terminate("job-one"))
         self.assertFalse(receipt["billing_reconciled"])
         snapshot = self.controller.snapshot()
-        self.assertEqual(snapshot["jobs"][0]["state"], "cleanup_pending")
+        self.assertEqual(snapshot["jobs"][0]["state"], "billing_pending")
         self.assertEqual(snapshot["budget"]["reservations"][0]["state"], "held")
         self.assertEqual(snapshot["budget"]["resources"]["modal_micro_usd"]["committed"], 10000000)
         self.assertEqual(self.run_async(self.lifecycle.terminate("job-one")), receipt)

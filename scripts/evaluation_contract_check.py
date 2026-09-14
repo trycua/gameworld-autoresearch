@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from fps_bench.evaluation_contract import (
-    SOURCE_FILES, UPSTREAM_FILES, canonical, digest, freeze, paired_decision,
+    SOURCE_FILES, UPSTREAM_FILES, canonical, digest, factorial_decision, freeze, paired_decision,
     schedule, split_for_controller, validate_episode_config, verify, write_development_plan,
 )
 
@@ -127,6 +127,34 @@ class ContractTests(unittest.TestCase):
             orders.add(left["candidate"])
         self.assertEqual(orders, {"baseline", "candidate"})
         self.assertEqual(len(schedule(self.contract, "development", ["bb", "bm", "db", "dm"], 7)), 64)
+
+    def test_task_keyed_schedule_and_factorial_decision(self):
+        tasks = [{"id": f"0{index}_game--0{index}_03", "game": f"0{index}_game",
+                  "task": f"0{index}_03", "seed": 42} for index in range(1, 5)]
+        contract = {"spec": {"suite_id": "task-suite", "assignment_kind": "gameworld-task", "rules": {
+            "familywise_alpha": 0.05, "maximum_confirmations": 2,
+            "maximum_invalid_action_rate_increase": 0.05,
+            "maximum_median_latency_ratio": 1.5, "minimum_absolute_improvement": 0.25,
+        }}, "episode_template": {"max_steps": 60},
+            "public_splits": {"development": {"tasks": tasks, "repeats": 1}}}
+        candidates = ["baseline", "driver", "model", "joint"]
+        runs = schedule(contract, "development", candidates, 11)
+        self.assertEqual(len(runs), 16)
+        self.assertEqual({run["task_id"] for run in runs}, {task["id"] for task in tasks})
+        contract_hash = digest(canonical(contract))
+        rows = []
+        for run in runs:
+            task_index = int(run["task_id"][:2])
+            success = (run["candidate"] == "joint"
+                       or run["candidate"] == "driver" and task_index == 1
+                       or run["candidate"] == "model" and task_index == 2)
+            rows.append({**{key: run[key] for key in ("candidate", "split", "task_id", "game", "task", "seed", "repeat")},
+                         "contract_sha256": contract_hash, "status": "complete", "success": success,
+                         "steps": 10, "invalid_actions": 0, "seconds": 5.0})
+        result = factorial_decision(contract, "development", rows, *candidates)
+        self.assertEqual(result["decision"], "nominate_joint")
+        self.assertEqual(result["joint_over_best_isolated"], 0.75)
+        self.assertEqual(result["comparisons"]["driver_vs_baseline"]["independent_tasks"], 4)
 
     def test_plan_writes_seed_configs_without_dispatch(self):
         output = self.home / "plan"

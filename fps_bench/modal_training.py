@@ -109,10 +109,10 @@ class ModalSDKBackend:
 
 
 class ModalTrainingLifecycle:
-    def __init__(self, controller, backend=None):
+    def __init__(self, controller, backend=None, training_registry=None):
         self.controller = controller
         self.backend = backend or ModalSDKBackend()
-        self.training_registry = TrainingRegistry(controller)
+        self.training_registry = training_registry or TrainingRegistry(controller)
         with controller.ledger.transaction() as connection:
             connection.execute("CREATE TABLE IF NOT EXISTS modal_training_transfers "
                                "(job_id TEXT PRIMARY KEY REFERENCES jobs(id), staging_receipt TEXT, export_receipt TEXT)")
@@ -138,7 +138,9 @@ class ModalTrainingLifecycle:
             raise ValueError("Explicit Modal workspace/app/environment required")
         if not isinstance(environment_id, str) or not environment_id.startswith("en-"):
             raise ValueError("Pinned dedicated environment ID required")
-        self.training_registry.authenticate(job_id)
+        authenticated = self.training_registry.authenticate(job_id)
+        worker = self.training_registry.worker_plan(job_id, authenticated) if hasattr(
+            self.training_registry, "worker_plan") else None
         scope = {"workspace": workspace, "environment": environment, "environment_id": environment_id,
                  "app": app, "app_id": app_id, "isolation_policy": isolation_policy}
         guard = await check_scope(self.backend, scope)
@@ -158,6 +160,8 @@ class ModalTrainingLifecycle:
             identity = {**scope, "image_id": image_id,
                         "name": name, "seconds": seconds, "assignment": specification["assignment"],
                         "contract_sha256": self.controller.contract_hash}
+            if worker is not None:
+                identity["worker"] = worker
             tags = {"campaign": campaign, "job": job_id, "identity": digest(canonical(identity))}
             plan = {**identity, "tags": tags, "quote": quote, "scope_guard": guard}
             existing = connection.execute("SELECT plan FROM modal_training_launches WHERE job_id=?", (job_id,)).fetchone()
@@ -238,7 +242,10 @@ class ModalTrainingLifecycle:
     async def terminate(self, job_id):
         job, launch, plan = self.stored(job_id)
         if launch["termination_receipt"]:
-            return json.loads(launch["termination_receipt"])
+            receipt = json.loads(launch["termination_receipt"])
+            self.controller.provider_cleanup_confirmed(
+                job_id, "modal-sandbox-terminated:" + digest(canonical(receipt)))
+            return receipt
         if not launch["sandbox_id"]:
             if job["state"] == "reserved":
                 raise LedgerConflict("Undispatched work must be cancelled, not terminated")
@@ -260,4 +267,6 @@ class ModalTrainingLifecycle:
         with self.controller.ledger.transaction() as connection:
             connection.execute("UPDATE modal_training_launches SET termination_receipt=? WHERE job_id=?",
                                (canonical(receipt).decode(), job_id))
+        self.controller.provider_cleanup_confirmed(
+            job_id, "modal-sandbox-terminated:" + digest(canonical(receipt)))
         return receipt

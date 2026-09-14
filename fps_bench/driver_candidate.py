@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import time
 
@@ -119,6 +120,8 @@ def materialize_driver_candidate(proposal_path, proposal_sha256, patch_path, out
         driver_sha256 = digest(Path("/usr/local/bin/cua-driver").read_bytes())
         if driver_sha256 == base_driver:
             raise ValueError("Driver source patch did not change the installed binary")
+        shutil.copyfile("/usr/local/bin/cua-driver", output / "cua-driver")
+        (output / "cua-driver").chmod(0o500)
         rust = root / "cua-driver/rust"
         tests.append(run_command([
             "cargo", "test", "--offline", "--locked", "-p", "cua-driver-core",
@@ -147,6 +150,7 @@ def materialize_driver_candidate(proposal_path, proposal_sha256, patch_path, out
             "source_after": after,
             "base_driver_sha256": base_driver,
             "driver_sha256": driver_sha256,
+            "binary": {"path": "cua-driver", "sha256": driver_sha256},
             "tests": tests,
             "desktop_contract_sha256": digest((output / "desktop-contract.json").read_bytes()),
             "seconds": time.monotonic() - started,

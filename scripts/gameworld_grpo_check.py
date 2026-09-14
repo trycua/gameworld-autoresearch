@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from fps_bench.evaluation_contract import canonical, digest
-from fps_bench.gameworld_grpo import group_advantages, reward_components, verify_rollout_dataset
+from fps_bench.gameworld_grpo import group_advantages, reward_components, verify_grpo_adapter, verify_rollout_dataset
 from fps_bench.gameworld_research import load_policy
 
 
@@ -119,7 +119,29 @@ class GrpoTests(unittest.TestCase):
         (self.root / "rollouts.json").write_bytes(payload)
         with self.assertRaises(ValueError):
             verify_rollout_dataset(self.root, digest(payload), policy=self.policy, context=self.context,
-                                    expected_policy=self.policy_identity, expected_driver_sha256=self.driver)
+                                   expected_policy=self.policy_identity, expected_driver_sha256=self.driver)
+
+    def test_grpo_adapter_verifier_binds_parent_dataset_and_driver(self):
+        adapter = self.root / "adapter"
+        adapter.mkdir()
+        config, weights = b"{}", b"weights"
+        (adapter / "adapter_config.json").write_bytes(config)
+        (adapter / "adapter_model.safetensors").write_bytes(weights)
+        manifest = {"schema_version": 1, "objective": "grpo",
+                    "base_model": self.policy_identity["base_model"],
+                    "base_revision": self.policy_identity["base_revision"],
+                    "processor_revision": self.policy_identity["base_revision"],
+                    "parent_adapter_sha256": self.policy_identity["adapter_sha256"],
+                    "rollout_dataset_sha256": "d" * 64, "driver_sha256": self.driver,
+                    "files": {"adapter_config.json": digest(config),
+                              "adapter_model.safetensors": digest(weights)},
+                    "hyperparameters": {"steps": 1}, "versions": {"torch": "test"}}
+        payload = canonical(manifest)
+        (adapter / "adapter-manifest.json").write_bytes(payload)
+        self.assertEqual(verify_grpo_adapter(adapter, digest(payload), self.policy_identity,
+                                            "d" * 64, self.driver), manifest)
+        with self.assertRaises(ValueError):
+            verify_grpo_adapter(adapter, digest(payload), self.policy_identity, "e" * 64, self.driver)
 
     @unittest.skipUnless(importlib.util.find_spec("torch"), "training extra is not installed")
     def test_grpo_tensor_objective_backpropagates(self):

@@ -162,6 +162,28 @@ class FleetTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(self.backend.delete_calls, 1)
 
+    def test_modal_backed_desktop_release_retains_billing_hold(self):
+        task_fixture = fixtures.GameWorldControllerTests()
+        task_fixture.setUp()
+        self.addCleanup(task_fixture.doCleanups)
+        controller = task_fixture.controller
+        task = task_fixture.tasks[0]
+        assignment = {"split": "development", "task_id": task["id"], "game": task["game"],
+                      "task": task["task"], "seed": task["seed"], "repeat": 0}
+        controller.admit_job("evaluation", "baseline", "evaluation", assignment,
+                             {"modal_micro_usd": 100}, 600)
+        backend = FakeBackend(controller.contract["spec"]["provenance"]["image"])
+        lifecycle = FleetLifecycle(controller, "test-pool", task_fixture.home / "fleet", backend)
+        lifecycle.output.mkdir()
+        self.run_async(lifecycle.acquire("evaluation"))
+        controller.record_result("evaluation", {**assignment, "candidate": "baseline",
+                                 "contract_sha256": task_fixture.hash, "status": "complete", "success": False,
+                                 "steps": 10, "invalid_actions": 0, "seconds": 5.0}, "e" * 64)
+        self.run_async(lifecycle.release("evaluation"))
+        job = controller.snapshot()["jobs"][0]
+        self.assertEqual(job["state"], "billing_pending")
+        self.assertEqual(controller.recovery_actions()[0]["action"], "reconcile_provider_billing")
+
 
 if __name__ == "__main__":
     unittest.main()

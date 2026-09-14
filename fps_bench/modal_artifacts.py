@@ -24,17 +24,18 @@ class ModalSandboxFiles:
     def __init__(self, sandbox_id):
         self.sandbox_id = sandbox_id
 
-    async def begin_stage(self):
+    async def begin_stage(self, roots=("/dataset",)):
         import modal
         sandbox = await modal.Sandbox.from_id.aio(self.sandbox_id)
-        process = await sandbox.exec.aio("python", "-c", "import os; os.mkdir('/dataset')", timeout=30)
+        command = "import os,sys; [os.mkdir(path) for path in sys.argv[1:]]"
+        process = await sandbox.exec.aio("python", "-c", command, *roots, timeout=30)
         if await process.wait.aio() != 0:
             raise ValueError("Dataset destination already exists or cannot be created")
 
-    async def write(self, name, data):
+    async def write(self, name, data, root="/dataset"):
         import modal
         sandbox = await modal.Sandbox.from_id.aio(self.sandbox_id)
-        await sandbox.filesystem.write_bytes.aio(data, "/dataset/" + name)
+        await sandbox.filesystem.write_bytes.aio(data, root.rstrip("/") + "/" + name)
 
     async def read(self, path, limit=MAX_FILE_BYTES):
         import modal

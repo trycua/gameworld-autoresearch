@@ -17,6 +17,7 @@ def main():
     parser.add_argument("--dataset", type=Path, default=Path("/dataset"))
     parser.add_argument("--dataset-sha256", required=True)
     parser.add_argument("--contract-sha256")
+    parser.add_argument("--evaluation-contract-sha256", required=True)
     parser.add_argument("--policy-identity", type=Path)
     parser.add_argument("--driver-sha256")
     parser.add_argument("--parent-adapter", type=Path)
@@ -52,7 +53,8 @@ def main():
                 output=args.output / "training", steps=args.steps,
                 parent_adapter=args.parent_adapter, telemetry=telemetry, experiment=args.experiment)
         exclusive_write(args.output / "worker-finished.json", canonical({
-            "campaign": args.campaign, "experiment": args.experiment, "objective": args.objective,
+            "job_id": args.experiment, "campaign": args.campaign, "experiment": args.experiment,
+            "objective": args.objective, "contract_sha256": args.evaluation_contract_sha256,
             "dataset_sha256": args.dataset_sha256,
             "result_sha256": digest((args.output / "training/result.json").read_bytes()),
             "adapter_manifest_sha256": result["adapter_manifest_sha256"],

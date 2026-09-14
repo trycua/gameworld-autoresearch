@@ -89,10 +89,16 @@ class FleetLifecycle:
     def identity(self, job_id):
         job = self.job(job_id)
         specification = json.loads(job["specification"])
-        if job["kind"] != "driver_build" or specification["reservations"]:
-            raise ValueError("This adapter currently supports only Fleet-only build/probe jobs")
-        if specification["assignment"] != {"pool": self.pool, "operation": "warm-driver-probe"}:
-            raise ValueError("Job is not assigned to this pool and operation")
+        if job["kind"] not in ("driver_build", "rollout", "evaluation"):
+            raise ValueError("Only desktop jobs may use the Fleet lifecycle")
+        resources = set(specification["reservations"])
+        if ((job["kind"] == "driver_build" and resources)
+                or (job["kind"] in ("rollout", "evaluation") and resources != {"modal_micro_usd"})):
+            raise ValueError("Fleet desktop job resources differ from the controller contract")
+        assignment = specification["assignment"]
+        if job["kind"] == "driver_build" and (assignment.get("pool") != self.pool
+                or assignment.get("operation") not in ("warm-driver-probe", "driver-candidate")):
+            raise ValueError("Driver build job is not assigned to this pool and operation")
         campaign = self.controller.ledger.snapshot()["campaign"]["id"]
         name = "gw-" + digest(canonical([campaign, job_id]))[:24]
         return job, {"version": 1, "provider": "fleet", "pool": self.pool, "namespace": self.pool,
@@ -186,7 +192,7 @@ class FleetLifecycle:
             receipt = json.loads(path.read_bytes())
         else:
             exclusive_write(path, canonical(receipt))
-        self.controller.cleanup_confirmed(job_id, "fleet-claim-release:" + digest(canonical(receipt)), {})
+        self.controller.provider_cleanup_confirmed(job_id, "fleet-claim-release:" + digest(canonical(receipt)))
         return receipt
 
     async def wait_zero(self, timeout_seconds=900):

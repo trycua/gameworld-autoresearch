@@ -151,24 +151,53 @@ def split_for_controller(contract, name, private_path=None):
     return private["splits"][name]
 
 
+def split_units(settings):
+    if not isinstance(settings, dict) or type(settings.get("repeats")) is not int or settings["repeats"] <= 0:
+        raise ValueError("Evaluation split requires positive repeats")
+    if set(settings) == {"seeds", "repeats"}:
+        seeds = settings["seeds"]
+        if (not isinstance(seeds, list) or not seeds or len(seeds) != len(set(seeds))
+                or any(type(seed) is not int or not 0 <= seed < 2**32 for seed in seeds)):
+            raise ValueError("Evaluation split has invalid seeds")
+        return "seed", [{"seed": seed} for seed in seeds]
+    if set(settings) == {"tasks", "repeats"}:
+        tasks = settings["tasks"]
+        expected = {"id", "game", "task", "seed"}
+        if not isinstance(tasks, list) or not tasks:
+            raise ValueError("Evaluation split requires tasks")
+        units = []
+        for task in tasks:
+            if (not isinstance(task, dict) or set(task) != expected
+                    or not isinstance(task["id"], str) or task["id"] != f"{task['game']}--{task['task']}"
+                    or type(task["seed"]) is not int or not 0 <= task["seed"] < 2**32):
+                raise ValueError("Evaluation split has an invalid task assignment")
+            units.append({"task_id": task["id"], "game": task["game"],
+                          "task": task["task"], "seed": task["seed"]})
+        if len({unit["task_id"] for unit in units}) != len(units):
+            raise ValueError("Evaluation split repeats a task")
+        return "task_id", units
+    raise ValueError("Evaluation split must use either seeds or GameWorld tasks")
+
+
 def schedule(contract, split, candidates, randomization_seed, private_path=None):
     if not isinstance(candidates, list) or len(candidates) not in (1, 2, 4) or len(set(candidates)) != len(candidates):
         raise ValueError("Provide one baseline, two paired, or four factorial candidate IDs")
     if any(not isinstance(name, str) or not name for name in candidates):
         raise ValueError("Candidate IDs must be nonempty")
     settings = split_for_controller(contract, split, private_path)
+    axis, units = split_units(settings)
     generator = random.Random(randomization_seed)
-    seeds = list(settings["seeds"])
-    generator.shuffle(seeds)
+    units = list(units)
+    generator.shuffle(units)
     runs = []
     for repeat in range(settings["repeats"]):
-        for seed in seeds:
+        for unit in units:
             order = list(candidates)
             generator.shuffle(order)
             for candidate in order:
-                runs.append({"candidate": candidate, "split": split, "seed": seed, "repeat": repeat,
+                runs.append({"candidate": candidate, "split": split, **unit, "repeat": repeat,
                              "episode_id": digest(canonical([contract["spec"]["suite_id"], split,
-                                                            candidate, seed, repeat]))[:24]})
+                                                            candidate, unit[axis], repeat]))[:24]})
     return runs
 
 
@@ -178,15 +207,19 @@ def paired_decision(contract, split, rows, baseline, candidate, private_path=Non
     if split not in ("development", "confirmation"):
         raise ValueError("Training and sealed results cannot select a candidate")
     settings = split_for_controller(contract, split, private_path)
-    expected = {(seed, repeat, name) for seed in settings["seeds"]
+    axis, units = split_units(settings)
+    unit_map = {unit[axis]: unit for unit in units}
+    expected = {(unit[axis], repeat, name) for unit in units
                 for repeat in range(settings["repeats"]) for name in (baseline, candidate)}
     records = {}
     for row in rows:
         if row.get("contract_sha256") != digest(canonical(contract)):
             raise ValueError("Episode belongs to another evaluation contract")
-        key = (row["seed"], row["repeat"], row["candidate"])
+        key = (row.get(axis), row.get("repeat"), row.get("candidate"))
         if row.get("split") != split or key not in expected or key in records:
             raise ValueError("Unexpected, cross-split or duplicate episode")
+        if any(row.get(name) != value for name, value in unit_map[key[0]].items()):
+            raise ValueError("Episode assignment differs from the frozen split")
         records[key] = row
     if set(records) != expected:
         return {"decision": "incomplete", "missing_episodes": len(expected - set(records))}
@@ -206,10 +239,11 @@ def paired_decision(contract, split, rows, baseline, candidate, private_path=Non
     groups = {name: [row for row in rows if row["candidate"] == name] for name in (baseline, candidate)}
     rates = {name: statistics.mean(row["success"] for row in group) for name, group in groups.items()}
     delta = rates[candidate] - rates[baseline]
-    seed_deltas = [statistics.mean(
-        int(records[(seed, repeat, candidate)]["success"]) - int(records[(seed, repeat, baseline)]["success"])
-        for repeat in range(settings["repeats"])) for seed in settings["seeds"]]
-    positive, negative = sum(value > 0 for value in seed_deltas), sum(value < 0 for value in seed_deltas)
+    unit_deltas = [statistics.mean(
+        int(records[(unit[axis], repeat, candidate)]["success"])
+        - int(records[(unit[axis], repeat, baseline)]["success"])
+        for repeat in range(settings["repeats"])) for unit in units]
+    positive, negative = sum(value > 0 for value in unit_deltas), sum(value < 0 for value in unit_deltas)
     discordant = positive + negative
     probability = sum(math.comb(discordant, index) for index in range(positive, discordant + 1)) / 2**discordant
     rules = contract["spec"]["rules"]
@@ -217,14 +251,16 @@ def paired_decision(contract, split, rows, baseline, candidate, private_path=Non
                for name, group in groups.items()}
     latency_ratio = statistics.median(row["seconds"] for row in groups[candidate]) / statistics.median(
         row["seconds"] for row in groups[baseline])
-    margin = math.sqrt(2 * math.log(2 / rules["familywise_alpha"]) / len(seed_deltas))
+    margin = math.sqrt(2 * math.log(2 / rules["familywise_alpha"]) / len(unit_deltas))
     result = {"paired_difference_hoeffding_interval": [max(-1, delta - margin), min(1, delta + margin)],
               "baseline_success_rate": rates[baseline], "candidate_success_rate": rates[candidate],
-              "absolute_improvement": delta, "independent_seeds": len(settings["seeds"]),
-              "episodes_per_candidate": len(groups[baseline]), "positive_seeds": positive,
-              "negative_seeds": negative, "one_sided_sign_p": probability,
+              "absolute_improvement": delta, "episodes_per_candidate": len(groups[baseline]),
+              "one_sided_sign_p": probability,
               "invalid_action_rate_increase": invalid[candidate] - invalid[baseline],
               "median_latency_ratio": latency_ratio}
+    label = "seeds" if axis == "seed" else "tasks"
+    result.update({f"independent_{label}": len(units), f"positive_{label}": positive,
+                   f"negative_{label}": negative})
     if (result["invalid_action_rate_increase"] > rules["maximum_invalid_action_rate_increase"]
             or latency_ratio > rules["maximum_median_latency_ratio"]):
         result["decision"] = "regression"
@@ -239,6 +275,60 @@ def paired_decision(contract, split, rows, baseline, candidate, private_path=Non
     return result
 
 
+def factorial_decision(contract, split, rows, baseline, driver, model, joint, private_path=None):
+    candidates = (baseline, driver, model, joint)
+    if len(set(candidates)) != 4:
+        raise ValueError("Factorial candidates must be distinct")
+    if any(row.get("candidate") not in candidates for row in rows):
+        raise ValueError("Factorial results contain an unrelated candidate")
+    comparisons = {
+        "driver_vs_baseline": paired_decision(contract, split,
+                                               [row for row in rows if row.get("candidate") in (baseline, driver)],
+                                               baseline, driver, private_path),
+        "model_vs_baseline": paired_decision(contract, split,
+                                              [row for row in rows if row.get("candidate") in (baseline, model)],
+                                              baseline, model, private_path),
+        "joint_vs_baseline": paired_decision(contract, split,
+                                              [row for row in rows if row.get("candidate") in (baseline, joint)],
+                                              baseline, joint, private_path),
+        "joint_vs_driver": paired_decision(contract, split,
+                                            [row for row in rows if row.get("candidate") in (driver, joint)],
+                                            driver, joint, private_path),
+        "joint_vs_model": paired_decision(contract, split,
+                                           [row for row in rows if row.get("candidate") in (model, joint)],
+                                           model, joint, private_path),
+    }
+    terminal = {result["decision"] for result in comparisons.values()}
+    if "incomplete" in terminal:
+        return {"decision": "incomplete", "comparisons": comparisons}
+    if "infrastructure_failure" in terminal:
+        return {"decision": "infrastructure_failure", "comparisons": comparisons}
+    settings = split_for_controller(contract, split, private_path)
+    axis, units = split_units(settings)
+    records = {(row[axis], row["repeat"], row["candidate"]): row for row in rows}
+    interactions = []
+    for unit in units:
+        for repeat in range(settings["repeats"]):
+            values = {candidate: int(records[(unit[axis], repeat, candidate)]["success"])
+                      for candidate in candidates}
+            interactions.append(values[joint] - values[driver] - values[model] + values[baseline])
+    rates = {candidate: statistics.mean(row["success"] for row in rows if row["candidate"] == candidate)
+             for candidate in candidates}
+    joint_over_best = rates[joint] - max(rates[driver], rates[model])
+    interaction = statistics.mean(interactions)
+    minimum = contract["spec"]["rules"]["minimum_absolute_improvement"]
+    regressions = {comparisons[name]["decision"] for name in ("joint_vs_driver", "joint_vs_model")}
+    if "regression" in regressions:
+        decision = "regression"
+    elif (comparisons["joint_vs_baseline"]["decision"] in ("nominate", "confirmation_pass")
+          and joint_over_best >= minimum and interaction > 0):
+        decision = "nominate_joint" if split == "development" else "confirmation_pass"
+    else:
+        decision = "no_interaction"
+    return {"decision": decision, "success_rates": rates, "joint_over_best_isolated": joint_over_best,
+            "mean_interaction": interaction, "comparisons": comparisons}
+
+
 
 def write_development_plan(contract_path, expected_hash, output, candidates, randomization_seed):
     contract = verify(contract_path, expected_hash)
@@ -248,7 +338,8 @@ def write_development_plan(contract_path, expected_hash, output, candidates, ran
     for run in runs:
         run["contract_sha256"] = expected_hash
         run["config_file"] = run["episode_id"] + ".json"
-        configuration = {**contract["episode_template"], "seed": run["seed"]}
+        configuration = {**contract["episode_template"],
+                         **{key: run[key] for key in ("game", "task", "seed") if key in run}}
         exclusive_write(output / run["config_file"], canonical(configuration))
     plan = {"contract_sha256": expected_hash, "split": "development", "runs": runs,
             "randomization_seed": randomization_seed, "execution_status": "not_started",

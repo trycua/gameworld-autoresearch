@@ -7,13 +7,17 @@ import re
 import time
 
 from fps_bench.campaign_ledger import BudgetRefused, CampaignLedger, LedgerConflict, positive_integer, accounting_totals
-from fps_bench.evaluation_contract import canonical, digest, paired_decision, split_for_controller, verify
+from fps_bench.evaluation_contract import (
+    canonical, digest, factorial_decision, paired_decision, split_for_controller, split_units, verify,
+)
 
 
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
-JOB_GROUPS = {"evaluation": "desktop", "driver_build": "desktop", "training": "training", "research": "research"}
+JOB_GROUPS = {"evaluation": "desktop", "rollout": "desktop", "driver_build": "desktop",
+              "training": "training", "research": "research"}
 GROUP_LIMITS = {"desktop": 2, "training": 1, "research": 2}
+ACTIVE_PROVIDER_STATES = {"reserved", "dispatching", "running", "cleanup_pending"}
 
 
 class CampaignController:
@@ -42,6 +46,9 @@ class CampaignController:
                                "kind TEXT NOT NULL, resource_group TEXT NOT NULL, specification TEXT NOT NULL, "
                                "deadline INTEGER NOT NULL, state TEXT NOT NULL, provider_id TEXT, result TEXT, "
                                "cleanup_receipt TEXT UNIQUE)")
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(jobs)")}
+            if "provider_cleanup_receipt" not in columns:
+                connection.execute("ALTER TABLE jobs ADD COLUMN provider_cleanup_receipt TEXT")
             connection.execute("CREATE TABLE IF NOT EXISTS decisions "
                                "(candidate TEXT NOT NULL REFERENCES candidates(id), split TEXT NOT NULL, "
                                "input_hash TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(candidate,split))")
@@ -98,6 +105,9 @@ class CampaignController:
                 or not isinstance(model["served_model"], str) or not model["served_model"].strip()
                 or (model["adapter_sha256"] is not None and not SHA256.fullmatch(model["adapter_sha256"]))):
             raise ValueError("Candidate model identity is incomplete or changes base/processor revision")
+        task_contract = self.contract["spec"].get("assignment_kind") == "gameworld-task"
+        if task_contract and not SHA256.fullmatch(manifest.get("policy_sha256", "")):
+            raise ValueError("GameWorld candidates require an immutable serving policy identity")
         payload = canonical(manifest).decode()
         with self.ledger.transaction() as connection:
             settings = self._controller(connection)
@@ -122,13 +132,31 @@ class CampaignController:
                 driver_changed = manifest["driver_sha256"] != parent["driver_sha256"]
                 model_changed = model != parent["model"]
                 if manifest["change_class"] == "driver":
-                    if not driver_changed or model_changed or not SHA256.fullmatch(manifest.get("patch_sha256", "")):
+                    if (not driver_changed or model_changed or not SHA256.fullmatch(manifest.get("patch_sha256", ""))
+                            or task_contract and manifest["policy_sha256"] != parent.get("policy_sha256")):
                         raise ValueError("Driver candidate must change only driver and identify its patch")
                 elif manifest["change_class"] == "model":
-                    if driver_changed or not model_changed or model["adapter_sha256"] is None:
+                    if (driver_changed or not model_changed or model["adapter_sha256"] is None
+                            or task_contract and manifest["policy_sha256"] == parent.get("policy_sha256")):
                         raise ValueError("Model candidate must change only the trained model")
                 elif manifest["change_class"] == "joint":
-                    raise ValueError("Joint promotion requires the pending factorial provenance gate")
+                    components = manifest.get("components")
+                    if (not driver_changed or not model_changed or not isinstance(components, dict)
+                            or set(components) != {"driver", "model"}):
+                        raise ValueError("Joint candidate requires exact driver and model components")
+                    driver_row = self._candidate(connection, components["driver"])
+                    model_row = self._candidate(connection, components["model"])
+                    driver_manifest, model_manifest = map(json.loads, (driver_row["manifest"], model_row["manifest"]))
+                    if (driver_row["state"] != "nominated" or model_row["state"] != "nominated"
+                            or driver_manifest["change_class"] != "driver"
+                            or model_manifest["change_class"] != "model"
+                            or driver_manifest["parent"] != manifest["parent"]
+                            or model_manifest["parent"] != manifest["parent"]
+                            or manifest["driver_sha256"] != driver_manifest["driver_sha256"]
+                            or manifest["model"] != model_manifest["model"]
+                            or task_contract and manifest["policy_sha256"] != model_manifest["policy_sha256"]
+                            or manifest.get("patch_sha256") != driver_manifest.get("patch_sha256")):
+                        raise LedgerConflict("Joint candidate components are not qualified isolated candidates")
                 else:
                     raise ValueError("Unsupported candidate class")
                 state = "materialized"
@@ -148,7 +176,17 @@ class CampaignController:
         required_resource = None if kind == "driver_build" else ("litellm_tokens" if kind == "research" else "modal_micro_usd")
         if required_resource is not None and required_resource not in reservations:
             raise ValueError("Job is missing required provider budget admission")
-        if kind == "training":
+        task_contract = self.contract["spec"].get("assignment_kind") == "gameworld-task"
+        if kind == "driver_build" and task_contract:
+            probe = set(assignment) == {"pool", "operation"} and assignment.get("operation") == "warm-driver-probe"
+            candidate_build = (set(assignment) == {"pool", "operation", "proposal_id", "proposal_sha256", "patch_sha256"}
+                               and assignment.get("operation") == "driver-candidate"
+                               and IDENTIFIER.fullmatch(assignment.get("proposal_id", ""))
+                               and SHA256.fullmatch(assignment.get("proposal_sha256", ""))
+                               and SHA256.fullmatch(assignment.get("patch_sha256", "")))
+            if not isinstance(assignment.get("pool"), str) or not (probe or candidate_build):
+                raise ValueError("GameWorld driver builds require an immutable Fleet operation assignment")
+        if kind == "training" and not task_contract:
             if (set(assignment) != {"split", "seeds", "dataset_sha256"} or assignment["split"] != "train"
                     or not isinstance(assignment["seeds"], list) or not assignment["seeds"]
                     or not SHA256.fullmatch(assignment["dataset_sha256"])):
@@ -157,12 +195,43 @@ class CampaignController:
             if (any(type(seed) is not int or seed not in training_seeds for seed in assignment["seeds"])
                     or len(assignment["seeds"]) != len(set(assignment["seeds"]))):
                 raise ValueError("Training seeds must belong only to the registered training split")
+        if kind == "training" and task_contract:
+            required = {"split", "tasks", "dataset_sha256", "objective", "policy_sha256",
+                        "driver_sha256", "steps"}
+            train_tasks = {item["id"] for item in self.contract["public_splits"]["train"]["tasks"]}
+            if (set(assignment) != required or assignment["split"] != "train"
+                    or not isinstance(assignment["tasks"], list) or not assignment["tasks"]
+                    or len(assignment["tasks"]) != len(set(assignment["tasks"]))
+                    or not set(assignment["tasks"]) <= train_tasks
+                    or assignment["objective"] not in ("sft", "grpo")
+                    or not SHA256.fullmatch(assignment["dataset_sha256"])
+                    or not SHA256.fullmatch(assignment["policy_sha256"])
+                    or not SHA256.fullmatch(assignment["driver_sha256"])
+                    or type(assignment["steps"]) is not int or not 1 <= assignment["steps"] <= 32):
+                raise ValueError("GameWorld training requires a bounded authenticated task dataset")
+        if kind == "rollout":
+            required = {"split", "task_id", "game", "task", "seed", "repeat", "group_id", "members",
+                        "max_steps", "policy_sha256", "driver_sha256"}
+            if not task_contract or set(assignment) != required or assignment["split"] != "train":
+                raise ValueError("Rollouts require a GameWorld train-task assignment")
+            _, units = split_units(self.contract["public_splits"]["train"])
+            matches = [unit for unit in units if unit["task_id"] == assignment["task_id"]]
+            if (len(matches) != 1 or any(assignment[name] != value for name, value in matches[0].items())
+                    or assignment["repeat"] != 0 or not IDENTIFIER.fullmatch(assignment["group_id"])
+                    or type(assignment["members"]) is not int or not 2 <= assignment["members"] <= 8
+                    or type(assignment["max_steps"]) is not int or not 1 <= assignment["max_steps"] <= 60
+                    or not SHA256.fullmatch(assignment["policy_sha256"])
+                    or not SHA256.fullmatch(assignment["driver_sha256"])):
+                raise ValueError("Rollout assignment differs from the frozen GameWorld train split")
         if kind == "evaluation":
-            if set(assignment) != {"split", "seed", "repeat"}:
-                raise ValueError("Evaluation jobs require an exact split/seed/repeat assignment")
             settings = split_for_controller(self.contract, assignment["split"], self.private_splits)
-            if (type(assignment["seed"]) is not int or assignment["seed"] not in settings["seeds"]
-                    or type(assignment["repeat"]) is not int or not 0 <= assignment["repeat"] < settings["repeats"]):
+            axis, units = split_units(settings)
+            required = {"split", "repeat"} | {name for unit in units for name in unit}
+            matches = [unit for unit in units if unit[axis] == assignment.get(axis)]
+            if (set(assignment) != required or len(matches) != 1
+                    or any(assignment[name] != value for name, value in matches[0].items())
+                    or type(assignment["repeat"]) is not int
+                    or not 0 <= assignment["repeat"] < settings["repeats"]):
                 raise ValueError("Episode is not registered in the frozen split")
             if assignment["split"] in ("confirmation", "sealed"):
                 raise BudgetRefused("Private evaluation dispatch awaits a durable split-access lease")
@@ -179,11 +248,20 @@ class CampaignController:
             materialized = self._candidate(connection, candidate)
             if materialized["state"] in ("rejected", "retired"):
                 raise BudgetRefused("Candidate no longer admits work")
+            candidate_manifest = json.loads(materialized["manifest"])
+            if task_contract and kind in ("rollout", "training"):
+                if (assignment["driver_sha256"] != candidate_manifest["driver_sha256"]
+                        or assignment["policy_sha256"] != candidate_manifest.get("policy_sha256")):
+                    raise ValueError("GameWorld data generation identity differs from its source candidate")
             group = JOB_GROUPS[kind]
-            count = connection.execute("SELECT COUNT(*) FROM jobs WHERE resource_group=? AND state!='cleaned'", (group,)).fetchone()[0]
+            placeholders = ",".join("?" for _ in ACTIVE_PROVIDER_STATES)
+            count = connection.execute(
+                f"SELECT COUNT(*) FROM jobs WHERE resource_group=? AND state IN ({placeholders})",
+                (group, *sorted(ACTIVE_PROVIDER_STATES)),
+            ).fetchone()[0]
             if count >= GROUP_LIMITS[group]:
                 raise BudgetRefused("Pilot concurrency exhausted, including pending cleanup")
-            if kind == "evaluation":
+            if kind in ("evaluation", "rollout"):
                 for row in connection.execute("SELECT specification FROM jobs WHERE candidate=? AND kind='evaluation'", (candidate,)):
                     if json.loads(row[0])["assignment"] == assignment:
                         raise LedgerConflict("Episode already assigned; hidden retries are forbidden")
@@ -192,8 +270,11 @@ class CampaignController:
                 raise BudgetRefused("Job leaves insufficient campaign cleanup time")
             for resource, amount in reservations.items():
                 self.ledger._reserve_in_transaction(connection, f"job:{job_id}:{resource}", resource, amount, deadline)
-            connection.execute("INSERT INTO jobs VALUES (?,?,?,?,?,?,'reserved',NULL,NULL,NULL)",
-                               (job_id, candidate, kind, group, specification, deadline))
+            connection.execute(
+                "INSERT INTO jobs(id,candidate,kind,resource_group,specification,deadline,state) "
+                "VALUES (?,?,?,?,?,?,'reserved')",
+                (job_id, candidate, kind, group, specification, deadline),
+            )
             self.ledger._event(connection, "job_admitted", {"id": job_id, "candidate": candidate, "kind": kind})
             return dict(self._job(connection, job_id))
 
@@ -250,12 +331,75 @@ class CampaignController:
         with self.ledger.transaction() as connection:
             self._controller(connection)
             job = self._job(connection, job_id)
-            if job["state"] in ("cleanup_pending", "cleaned"):
+            if job["state"] in ("cleanup_pending", "billing_pending", "cleaned"):
                 return
             if job["state"] != "running":
                 raise LedgerConflict("Reconcile provider submission before requesting cleanup")
             connection.execute("UPDATE jobs SET state='cleanup_pending' WHERE id=?", (job_id,))
             self.ledger._event(connection, "cleanup_requested", {"id": job_id})
+
+    def _provider_cleanup_in_transaction(self, connection, job, receipt):
+        resources = json.loads(job["specification"])["reservations"]
+        if job["state"] == "cleaned":
+            if job["provider_cleanup_receipt"] != receipt:
+                raise LedgerConflict("Provider cleanup receipt is immutable")
+            return job["state"]
+        if job["state"] == "billing_pending":
+            if job["provider_cleanup_receipt"] != receipt:
+                raise LedgerConflict("Provider cleanup receipt is immutable")
+            return job["state"]
+        if job["state"] not in ("running", "cleanup_pending"):
+            raise LedgerConflict("Provider cleanup requires an acknowledged provider")
+        state = "billing_pending" if resources else "cleaned"
+        cleanup_receipt = receipt if state == "cleaned" else None
+        connection.execute("UPDATE jobs SET state=?,provider_cleanup_receipt=?,cleanup_receipt=? WHERE id=?",
+                           (state, receipt, cleanup_receipt, job["id"]))
+        self.ledger._event(connection, "provider_cleanup_confirmed", {
+            "id": job["id"], "receipt": receipt, "billing_pending": bool(resources),
+        })
+        return state
+
+    def provider_cleanup_confirmed(self, job_id, receipt):
+        if not isinstance(receipt, str) or not receipt.strip():
+            raise ValueError("Validated cleanup/provider receipt required")
+        with self.ledger.transaction() as connection:
+            self._controller(connection)
+            job = self._job(connection, job_id)
+            self._provider_cleanup_in_transaction(connection, job, receipt)
+
+    def _settle_job_in_transaction(self, connection, job, actuals, receipt):
+        resources = json.loads(job["specification"])["reservations"]
+        if set(actuals) != set(resources):
+            raise ValueError("Every reserved resource needs reconciled usage")
+        for resource, actual in actuals.items():
+            positive_integer(actual, f"{resource} actual", allow_zero=True)
+        if job["state"] == "cleaned":
+            if job["cleanup_receipt"] != receipt:
+                raise LedgerConflict("Billing receipt is immutable")
+            for resource, actual in actuals.items():
+                reservation = connection.execute(
+                    "SELECT state,actual FROM reservations WHERE id=?", (f"job:{job['id']}:{resource}",)
+                ).fetchone()
+                if reservation is None or reservation["state"] != "settled" or reservation["actual"] != actual:
+                    raise LedgerConflict("Settled provider usage is immutable")
+            return
+        if job["state"] != "billing_pending" or not job["provider_cleanup_receipt"]:
+            raise LedgerConflict("Provider cleanup must complete before billing settlement")
+        for resource, actual in actuals.items():
+            self.ledger._settle_in_transaction(
+                connection, f"job:{job['id']}:{resource}", actual,
+                f"{receipt}:{job['id']}:{resource}")
+        connection.execute("UPDATE jobs SET state='cleaned',cleanup_receipt=? WHERE id=?", (receipt, job["id"]))
+        self.ledger._event(connection, "billing_settled", {
+            "id": job["id"], "receipt": receipt, "provider_cleanup_receipt": job["provider_cleanup_receipt"],
+        })
+
+    def settle_job(self, job_id, actuals, receipt):
+        if not isinstance(receipt, str) or not receipt.strip():
+            raise ValueError("Authenticated provider billing receipt required")
+        with self.ledger.transaction() as connection:
+            self._controller(connection)
+            self._settle_job_in_transaction(connection, self._job(connection, job_id), actuals, receipt)
 
     def cleanup_confirmed(self, job_id, receipt, actuals):
         if not isinstance(receipt, str) or not receipt.strip():
@@ -266,15 +410,12 @@ class CampaignController:
             resources = json.loads(job["specification"])["reservations"]
             if set(actuals) != set(resources):
                 raise ValueError("Every reserved resource needs reconciled usage")
-            if job["state"] == "reserved":
-                raise LedgerConflict("Use cancel_undispatched for work that never left the controller")
-            if job["state"] == "cleaned" and job["cleanup_receipt"] != receipt:
-                raise LedgerConflict("Cleanup receipt is immutable")
             for resource, actual in actuals.items():
-                self.ledger._settle_in_transaction(connection, f"job:{job_id}:{resource}", actual, f"{receipt}:{resource}")
-            if job["state"] != "cleaned":
-                connection.execute("UPDATE jobs SET state='cleaned',cleanup_receipt=? WHERE id=?", (receipt, job_id))
-                self.ledger._event(connection, "cleanup_confirmed", {"id": job_id, "receipt": receipt})
+                positive_integer(actual, f"{resource} actual", allow_zero=True)
+            state = self._provider_cleanup_in_transaction(connection, job, receipt)
+            if state == "billing_pending":
+                job = self._job(connection, job_id)
+                self._settle_job_in_transaction(connection, job, actuals, receipt)
 
     def cancel_undispatched(self, job_id):
         with self.ledger.transaction() as connection:
@@ -287,7 +428,8 @@ class CampaignController:
                 raise LedgerConflict("Dispatch may have reached provider; zero-cost cancellation is unsafe")
             for resource in json.loads(job["specification"])["reservations"]:
                 self.ledger._settle_in_transaction(connection, f"job:{job_id}:{resource}", 0, f"{receipt}:{resource}")
-            connection.execute("UPDATE jobs SET state='cleaned',cleanup_receipt=? WHERE id=?", (receipt, job_id))
+            connection.execute("UPDATE jobs SET state='cleaned',provider_cleanup_receipt=?,cleanup_receipt=? WHERE id=?",
+                               (receipt, receipt, job_id))
             self.ledger._event(connection, "undispatched_cancelled", {"id": job_id})
 
     def stop(self, reason):
@@ -310,7 +452,8 @@ class CampaignController:
                 action = {"reserved": "cancel_undispatched" if stopping else "eligible_for_dispatch",
                           "dispatching": "reconcile_ambiguous_submission",
                           "running": "cancel_and_reconcile" if stopping else "poll_provider",
-                          "cleanup_pending": "export_artifacts_and_cleanup"}[job["state"]]
+                          "cleanup_pending": "export_artifacts_and_cleanup",
+                          "billing_pending": "reconcile_provider_billing"}[job["state"]]
                 actions.append({"job_id": job["id"], "action": action, "provider_id": job["provider_id"]})
             return actions
 
@@ -320,6 +463,8 @@ class CampaignController:
             proposal = self._candidate(connection, candidate)
             if proposal["parent"] is None:
                 raise ValueError("Baseline does not compete with itself")
+            if json.loads(proposal["manifest"])["change_class"] == "joint":
+                raise ValueError("Joint candidates require the factorial decision gate")
             rows = []
             for job in connection.execute("SELECT * FROM jobs WHERE candidate IN (?,?) AND kind='evaluation'",
                                           (candidate, proposal["parent"])):
@@ -332,7 +477,7 @@ class CampaignController:
             result = paired_decision(self.contract, "development", rows, proposal["parent"], candidate)
             if result["decision"] in ("incomplete", "infrastructure_failure"):
                 return result
-            input_hash = digest(canonical(sorted(rows, key=lambda row: (row["candidate"], row["seed"], row["repeat"]))))
+            input_hash = digest(canonical(sorted(rows, key=canonical)))
             existing = connection.execute("SELECT * FROM decisions WHERE candidate=? AND split='development'", (candidate,)).fetchone()
             if existing:
                 if existing["input_hash"] != input_hash:
@@ -343,6 +488,44 @@ class CampaignController:
             state = "nominated" if result["decision"] == "nominate" else "rejected"
             connection.execute("UPDATE candidates SET state=? WHERE id=?", (state, candidate))
             self.ledger._event(connection, "development_decision", {"candidate": candidate, "decision": result["decision"]})
+            return result
+
+    def decide_factorial(self, joint):
+        with self.ledger.transaction() as connection:
+            self._controller(connection)
+            proposal = self._candidate(connection, joint)
+            manifest = json.loads(proposal["manifest"])
+            if manifest["change_class"] != "joint":
+                raise ValueError("Factorial decisions require a joint candidate")
+            candidates = (manifest["parent"], manifest["components"]["driver"],
+                          manifest["components"]["model"], joint)
+            rows = []
+            for job in connection.execute(
+                    "SELECT * FROM jobs WHERE kind='evaluation' AND candidate IN (?,?,?,?)", candidates):
+                assigned = json.loads(job["specification"])["assignment"]
+                if assigned["split"] != "development":
+                    continue
+                if job["state"] != "cleaned" or job["result"] is None:
+                    raise LedgerConflict("Factorial comparison has unfinished evaluation jobs")
+                rows.append(json.loads(job["result"])["result"])
+            result = factorial_decision(self.contract, "development", rows, *candidates)
+            if result["decision"] in ("incomplete", "infrastructure_failure"):
+                return result
+            input_hash = digest(canonical(sorted(rows, key=canonical)))
+            existing = connection.execute(
+                "SELECT * FROM decisions WHERE candidate=? AND split='development-factorial'", (joint,)
+            ).fetchone()
+            if existing:
+                if existing["input_hash"] != input_hash:
+                    raise LedgerConflict("Factorial decision inputs changed")
+                return json.loads(existing["result"])
+            connection.execute("INSERT INTO decisions VALUES (?,'development-factorial',?,?)",
+                               (joint, input_hash, canonical(result).decode()))
+            state = "nominated" if result["decision"] == "nominate_joint" else "rejected"
+            connection.execute("UPDATE candidates SET state=? WHERE id=?", (state, joint))
+            self.ledger._event(connection, "factorial_development_decision", {
+                "candidate": joint, "decision": result["decision"], "components": manifest["components"],
+            })
             return result
 
     def emit_telemetry(self, telemetry, event_id):
@@ -358,13 +541,17 @@ class CampaignController:
                 "gameworld_modal_reserved": held("modal_micro_usd") / 1_000_000,
                 "gameworld_litellm_tokens": settled("litellm_tokens"),
                 "gameworld_litellm_reserved_tokens": held("litellm_tokens"),
-                "gameworld_active_claims": sum(job["kind"] in ("evaluation", "driver_build") and job["provider_id"] is not None and job["state"] != "cleaned"
+                "gameworld_active_claims": sum(job["kind"] in ("evaluation", "rollout", "driver_build")
+                                                and job["provider_id"] is not None and job["state"] in ACTIVE_PROVIDER_STATES
                                                 for job in snapshot["jobs"]),
-                "gameworld_active_training_jobs": sum(job["kind"] == "training" and job["provider_id"] is not None and job["state"] != "cleaned"
+                "gameworld_active_training_jobs": sum(job["kind"] == "training" and job["provider_id"] is not None
+                                                       and job["state"] in ACTIVE_PROVIDER_STATES
                                                        for job in snapshot["jobs"]),
-                "gameworld_desktop_slots_reserved": sum(job["kind"] in ("evaluation", "driver_build") and job["state"] != "cleaned"
+                "gameworld_desktop_slots_reserved": sum(job["kind"] in ("evaluation", "rollout", "driver_build")
+                                                        and job["state"] in ACTIVE_PROVIDER_STATES
                                                         for job in snapshot["jobs"]),
-                "gameworld_training_slots_reserved": sum(job["kind"] == "training" and job["state"] != "cleaned"
+                "gameworld_training_slots_reserved": sum(job["kind"] == "training"
+                                                         and job["state"] in ACTIVE_PROVIDER_STATES
                                                          for job in snapshot["jobs"]),
             })
             return True
@@ -375,7 +562,9 @@ class CampaignController:
         with self.ledger.transaction() as connection:
             settings = dict(self._controller(connection))
             candidates = [dict(row) for row in connection.execute("SELECT id,parent,manifest_hash,state FROM candidates ORDER BY id")]
-            jobs = [dict(row) for row in connection.execute("SELECT id,candidate,kind,state,provider_id,cleanup_receipt FROM jobs ORDER BY id")]
+            jobs = [dict(row) for row in connection.execute(
+                "SELECT id,candidate,kind,state,provider_id,provider_cleanup_receipt,cleanup_receipt "
+                "FROM jobs ORDER BY id")]
         return {"controller": settings, "candidates": candidates, "jobs": jobs,
                 "budget": self.ledger.snapshot(), "recovery": self.recovery_actions()}
 

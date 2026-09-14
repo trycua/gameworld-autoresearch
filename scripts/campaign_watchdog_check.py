@@ -49,7 +49,7 @@ class WatchdogTests(unittest.TestCase):
         events = self.run_async(self.watchdog.tick())
         self.assertEqual(events[0]["outcome"], "terminated_billing_pending")
         snapshot = self.controller.snapshot()
-        self.assertEqual(snapshot["jobs"][0]["state"], "cleanup_pending")
+        self.assertEqual(snapshot["jobs"][0]["state"], "billing_pending")
         self.assertEqual(snapshot["budget"]["reservations"][0]["state"], "held")
         reopened = CampaignWatchdog(self.controller, modal=self.lifecycle)
         self.run_async(reopened.tick())

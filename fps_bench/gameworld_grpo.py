@@ -300,6 +300,36 @@ def completion_logps(model, batch):
     return logps, mask
 
 
+def verify_grpo_adapter(root, expected_hash, policy_identity, dataset_hash, driver_sha256):
+    root = Path(root)
+    manifest_path = root / "adapter-manifest.json"
+    if not manifest_path.is_file() or manifest_path.is_symlink():
+        raise ValueError("GRPO adapter manifest is missing")
+    data = manifest_path.read_bytes()
+    if digest(data) != expected_hash or canonical(json.loads(data)) != data:
+        raise ValueError("GRPO adapter manifest identity changed")
+    manifest = json.loads(data)
+    required = {"schema_version", "objective", "base_model", "base_revision", "processor_revision",
+                "parent_adapter_sha256", "rollout_dataset_sha256", "driver_sha256", "files",
+                "hyperparameters", "versions"}
+    if (set(manifest) != required or manifest["schema_version"] != 1 or manifest["objective"] != "grpo"
+            or manifest["base_model"] != policy_identity["base_model"]
+            or manifest["base_revision"] != policy_identity["base_revision"]
+            or manifest["processor_revision"] != policy_identity["base_revision"]
+            or manifest["parent_adapter_sha256"] != policy_identity["adapter_sha256"]
+            or manifest["rollout_dataset_sha256"] != dataset_hash
+            or manifest["driver_sha256"] != driver_sha256
+            or not isinstance(manifest["files"], dict)
+            or not {"adapter_config.json", "adapter_model.safetensors"} <= set(manifest["files"])):
+        raise ValueError("GRPO adapter provenance differs from the admitted update")
+    for name, expected in manifest["files"].items():
+        path = root / name
+        if (not isinstance(name, str) or Path(name).name != name or not SHA256.fullmatch(expected)
+                or not path.is_file() or path.is_symlink() or digest(path.read_bytes()) != expected):
+            raise ValueError("GRPO adapter file identity changed")
+    return manifest
+
+
 def _parent_adapter(root, expected_hash, policy_identity):
     if expected_hash is None:
         if root is not None:
@@ -325,6 +355,10 @@ def _parent_adapter(root, expected_hash, policy_identity):
         if not path.is_file() or path.is_symlink() or digest(path.read_bytes()) != expected:
             raise ValueError("Parent adapter file identity changed")
     return root
+
+
+def verify_parent_adapter(root, expected_hash, policy_identity):
+    return _parent_adapter(root, expected_hash, policy_identity)
 
 
 def _load_rollout_rows(root, manifest):
