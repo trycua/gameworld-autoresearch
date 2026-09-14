@@ -192,3 +192,27 @@ the current training image, and run the driver/model validation slices before
 the bounded joint campaign. Do not spend on another unchanged standalone
 baseline just to re-prove the captured episode; use the first paired parent
 evaluation to verify the corrected live artifact packaging.
+
+## Latest deployment and train-only source custody
+
+Fleet workflow `34881632108` passed for source `6f08a22` and published
+`sha256:447fdc533f1cdc9d0818898736a19dfb29a6cf77e457bb220a9de4cc4dd88b4b`.
+Terraform applied this image in place, preserving the gVisor pool limits.
+New custody `20260914-6f08a22-v7` verified against the workspace and private
+splits with anchor
+`9de64674bde801aced0b3588c1a87df14d610ff8c06504a9f4dfb4cb7279f15e`.
+
+The baseline SFT exporter produced 18 train-only observations across nine games
+in `sft-sources-v1`, dataset hash
+`908095dc3f6eeeb02f5053648fcee6c25a5b4bfe0b6a873e8f997866d8a170cd`.
+These are positive-progress base-policy self-imitation samples, not expert
+demonstrations or evidence that an action caused progress. The catalog is ready
+for the next coordinator, but GPU training has not yet validated this dataset.
+
+The attempted current-image Modal import was rejected during ledger admission
+because the completed v8 serving reservation had expired unreconciled. The
+transaction rolled back before provider submission; there is no new import or
+$25 hold. Keep the scheduled 19:00:05 UTC serving reconciliation: no image
+import overlaps its window. Import the current training image only after that
+reconciliation, and retain its subsequent billing obligation. Current imported
+images still embed the superseded policy and must not launch new training.

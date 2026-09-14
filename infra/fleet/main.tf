@@ -17,7 +17,7 @@ resource "fleets_pool" "gameworld_autoresearch" {
   name                 = "gameworld-autoresearch"
   cpu_cores            = 4
   memory               = "16384Mi"
-  container_disk_image = "ghcr.io/trycua/gameworld-autoresearch@sha256:03b7f119165360a2c2657a9fde0fa6115d25d6473146e61f426567df12d1ef30"
+  container_disk_image = "ghcr.io/trycua/gameworld-autoresearch@sha256:447fdc533f1cdc9d0818898736a19dfb29a6cf77e457bb220a9de4cc4dd88b4b"
   runtime              = "gvisor"
   readiness_probe_json = jsonencode({ tcpSocket = { port = 8000 } })
 
