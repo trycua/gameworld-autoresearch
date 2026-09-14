@@ -1,4 +1,9 @@
-# Dedicated Modal pilot environment
+# Optional restricted Modal environment
+
+The selected pilot now uses the contributor-authorized app-scoped alternative
+in `docs/MODAL_APP_SCOPE.md`. Manager access is **not** a prerequisite for that
+path. This document preserves the optional stronger environment policy and its
+failed setup evidence.
 
 ## Manager action required
 
@@ -23,8 +28,9 @@ The command creates **only a new** `gameworld-` environment, restricted with
 maximum one GPU and two concurrent tasks, and verifies the resulting settings.
 It refuses existing names and preexisting output directories; it never silently
 adopts a collision or overwrites an existing environment. A failed/ambiguous
-creation must be inspected manually before retrying. Do not bypass the manager
-permission failure by creating an unrestricted environment or using `main`.
+creation must be inspected manually before retrying. The restricted-environment mode never silently falls back after a permission
+failure. The user separately approved the explicit app-scoped policy in `main`;
+that policy uses only already-authorized app APIs and does not change roles.
 Workspace managers retain their administrative privileges; default member access
 is not isolation from workspace administrators.
 

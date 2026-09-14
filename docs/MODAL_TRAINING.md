@@ -95,13 +95,17 @@ provided while those gates are missing.
 Dataset upload and checkpoint export are now implemented with offline recovery
 checks; see `docs/MODAL_ARTIFACTS.md`. Actual Modal transfers remain unverified.
 
-## Required environment backstop
+## Explicit isolation policy
 
-Training preparation now requires an exact restricted pilot environment ID and
-fresh read-back of its $25 compute budget, one-GPU/two-task limits and default
-no-access role. Creation and worker execution recheck these settings. Cleanup
-remains available if the settings change. The attempted live setup was denied
-because these credentials are not a workspace manager; no unrestricted fallback
-was used. See `docs/MODAL_ENVIRONMENT.md` for the manager action and the important
-limits of monthly provider compute budgets. This does not complete the campaign's
-cumulative all-in budget gate.
+The selected pilot uses the contributor-authorized `app-scoped` policy described
+in `docs/MODAL_APP_SCOPE.md`. It requires exact app/environment IDs and fresh
+identity read-back, while retaining ledger holds, fixed resource limits,
+no-network/no-secret training, and independent cleanup. It does not claim a
+provider-side budget or an RBAC boundary from other workspace members.
+
+The optional `restricted-environment` policy additionally requires the $25
+compute-budget and role/concurrency read-back in `docs/MODAL_ENVIRONMENT.md`.
+Its setup was denied for lack of manager permission, so it is not the selected
+pilot path. Policy choice is explicit and immutable per admitted launch; there
+is no silent downgrade. Neither mode substitutes for full all-in campaign
+accounting or grants permission to launch the unattended campaign.

@@ -22,6 +22,10 @@ class FakeModal:
         self.environment_budget = "25"
         self.environment_id = "en-test"
 
+    async def app_scope(self, workspace, environment, app):
+        return {"workspace": workspace, "environment": environment, "environment_id": self.environment_id,
+                "app": app, "app_id": "ap-test", "checked_at": datetime.now(timezone.utc).isoformat()}
+
     async def environment(self, workspace, name):
         return {"workspace": workspace, "name": name, "environment_id": self.environment_id,
                 "restricted": True, "default_member_role": "no-access", "max_concurrent_gpus": 1,
