@@ -3,9 +3,11 @@
 The first Docker build, offline container checks, GHCR publication and anonymous
 access passed in GitHub Actions run `34793067743` on September 14, 2026.
 See `docs/results/2026-09-14-qwen-training-image.md` for the digest and independent
-source/registry verification. **Modal import and GPU execution remain unverified.**
-The first image predates timestamp-enabled loss records; rebuild current source
-before using trusted controller-side loss import.
+source/registry verification. The newer timestamp-enabled source `6a1309c` has
+now been imported into Modal and used successfully for a pretrained L40S update,
+checkpoint reload and loss telemetry. See
+`docs/results/2026-09-14-qwen-pretrained-gpu.md`. This does not establish the full
+frozen-data controller/serving/evaluation lifecycle.
 
 ## Contents and isolation
 
@@ -62,5 +64,6 @@ is made.
 
 The first image has now passed Docker/offline container validation, with its
 source hashes checked against the published commit. The newer timestamp-enabled
-worker image, full GPU test, budgeted Modal import, and real training/staging/export
-lifecycle remain pending. Keep the launch-readiness gate closed.
+image and supervised pretrained GPU probe now pass as well. Frozen-data
+controller ingestion, adapter serving/evaluation and billing settlement remain
+pending. Keep the launch-readiness gate closed.

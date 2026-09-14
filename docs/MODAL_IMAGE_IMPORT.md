@@ -38,3 +38,20 @@ a general training launcher and creates no GPU sandbox.
 Checks: `python -m scripts.modal_image_import_check` verifies durable reservations,
 budget refusal before the build, immutable provenance/digest inputs, scope
 validation, completed replay and ambiguous-response restart behavior.
+
+## Live evidence
+
+The timestamp-enabled image was imported successfully in 152.77 seconds as
+`im-DDd0N6Q0E4OoWi4ZH3iPhP`, backed by registry digest
+`sha256:0a55fc62e69d7a14ba9bfac9f79ba190bb1886021d27fab3b599357358533f03`.
+A separate `ImageFromId` API read confirmed it. Completed replay returned the
+same ID with the build method disabled, and the $25 hold remains retained.
+Evidence: `results/runs/modal-image-import-20260914/` and
+`results/runs/qwen-training-image-6a1309c/`.
+
+The imported image subsequently passed source/cache checks and a real pretrained
+L40S LoRA update/reload; see `docs/results/2026-09-14-qwen-pretrained-gpu.md`.
+Modal 1.5.5 does not support arbitrary `Image.hydrate()` calls: use its public
+lazy `Image.from_id` constructor with Sandbox creation, or the pinned SDK's
+read-only `ImageFromId` RPC for a standalone identity check. No extra build was
+issued to perform verification.

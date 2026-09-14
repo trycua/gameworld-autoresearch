@@ -100,3 +100,12 @@ interactive reward research track.
 A subsequent full pretrained CPU compatibility result is documented in
 `docs/results/2026-09-14-qwen-pretrained-cpu.md`; it is separate from the tiny
 architecture and processor-only checks described above.
+
+## Live pretrained GPU evidence
+
+The L40S compatibility run now passes on a real historical GameWorld screenshot:
+one pretrained 2B LoRA update, 56 changed tensors, exact fresh-base reload and
+an exported safetensors adapter. Measured loss reached Prometheus and Loki via
+`otel.cua.ai`; both attempted sandboxes were independently confirmed terminated.
+See `docs/results/2026-09-14-qwen-pretrained-gpu.md`. This is not frozen-dataset
+training or proof of benchmark improvement.

@@ -84,7 +84,7 @@ class ModalSDKBackend:
         app = await modal.App.lookup.aio(plan["app"], environment_name=plan["environment"], create_if_missing=False)
         if plan.get("app_id") is not None and app.app_id != plan["app_id"]:
             raise LedgerConflict("App identity changed immediately before sandbox creation")
-        image = await modal.Image.from_id.aio(plan["image_id"])
+        image = modal.Image.from_id(plan["image_id"])
         sandbox = await modal.Sandbox.create.aio("/bin/sleep", str(plan["seconds"]),
                                                 app=app, image=image, **sandbox_options(plan))
         return {"id": sandbox.object_id, "tags": await sandbox.get_tags.aio()}
