@@ -212,6 +212,51 @@ class BaselineServingTests(unittest.TestCase):
         self.assertEqual(result["policy_identity"]["adapter_sha256"], adapter_sha256)
         self.assertIsNone(result["parent_policy_path"])
 
+    def test_known_pre_submission_refusal_is_closed_only_after_absence_check(self):
+        self.controller.begin_dispatch("baseline-serving")
+        self.lifecycle.record_submission_error("baseline-serving", {
+            "error_type": "InvalidError",
+            "message": "Cannot specify open ports when `block_network` is enabled",
+        })
+        result = self.run_async(self.lifecycle.reconcile_refused_create("baseline-serving"))
+        self.assertEqual(result["status"], "refused")
+        job = next(row for row in self.controller.snapshot()["jobs"] if row["id"] == "baseline-serving")
+        self.assertEqual(job["state"], "cleaned")
+        self.assertIsNone(job["provider_id"])
+
+
+class ModalServingCreateTests(unittest.TestCase):
+    def test_encrypted_port_uses_empty_outbound_allowlist(self):
+        checked_at = datetime.now(timezone.utc).isoformat()
+        rates = {"gpu_hour_cost_l4": "0.8", "cpu_hour_cost_sandbox": "0.1",
+                 "mem_gib_hour_cost_sandbox": "0.01"}
+        app = SimpleNamespace(app_id="ap-test")
+        sandbox = SimpleNamespace(object_id="sb-test")
+        volume = SimpleNamespace(with_mount_options=lambda **kwargs: "cache-volume")
+        modal = SimpleNamespace(
+            App=SimpleNamespace(lookup=SimpleNamespace(aio=AsyncMock(return_value=app))),
+            Image=SimpleNamespace(from_id=lambda image_id: "serving-image"),
+            Volume=SimpleNamespace(from_name=lambda *args, **kwargs: volume),
+            Sandbox=SimpleNamespace(create=SimpleNamespace(aio=AsyncMock(return_value=sandbox))),
+        )
+        backend = ModalServingBackend()
+        backend.app_scope = AsyncMock(return_value={
+            "workspace": "test", "environment": "main", "environment_id": "en-test",
+            "app": "gameworld-serving", "app_id": "ap-test", "checked_at": checked_at})
+        backend.prices = AsyncMock(return_value={"rates": rates, "checked_at": checked_at})
+        backend.inspect = AsyncMock(return_value={"id": "sb-test", "tags": {}, "returncode": None,
+                                                   "endpoint": "https://candidate.example/v1"})
+        plan = {"workspace": "test", "environment": "main", "environment_id": "en-test",
+                "app": "gameworld-serving", "app_id": "ap-test", "isolation_policy": "app-scoped",
+                "image_id": "im-serving", "name": "gw-serve-test", "tags": {}, "seconds": 600,
+                "quote": compute_reservation(rates, 600, checked_at)}
+        with patch.dict(sys.modules, {"modal": modal}):
+            asyncio.run(backend.create(plan))
+        options = modal.Sandbox.create.aio.await_args.kwargs
+        self.assertEqual(options["encrypted_ports"], [8000])
+        self.assertEqual(options["outbound_cidr_allowlist"], [])
+        self.assertNotIn("block_network", options)
+
 
 class ModalServerCommandTests(unittest.TestCase):
     def test_dual_lora_server_advertises_parent_and_child(self):

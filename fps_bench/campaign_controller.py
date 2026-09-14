@@ -746,6 +746,26 @@ class CampaignController:
             connection.execute("UPDATE jobs SET state='running',provider_id=? WHERE id=?", (provider_id, job_id))
             self.ledger._event(connection, "provider_started", {"id": job_id, "provider_id": provider_id})
 
+    def provider_submission_refused(self, job_id, receipt):
+        if not isinstance(receipt, str) or not receipt.startswith("provider-refused:"):
+            raise ValueError("Provider refusal receipt required")
+        with self.ledger.transaction() as connection:
+            self._controller(connection)
+            job = self._job(connection, job_id)
+            if job["state"] == "cleaned" and job["cleanup_receipt"] == receipt:
+                return
+            if (job["state"] != "dispatching" or job["provider_id"] is not None
+                    or job["result"] is not None):
+                raise LedgerConflict("Only a provider-refused unacknowledged dispatch can close without cleanup")
+            for resource in json.loads(job["specification"])["reservations"]:
+                self.ledger._settle_in_transaction(
+                    connection, f"job:{job_id}:{resource}", 0, f"{receipt}:{resource}")
+            connection.execute(
+                "UPDATE jobs SET state='cleaned',provider_cleanup_receipt=?,cleanup_receipt=? WHERE id=?",
+                (receipt, receipt, job_id),
+            )
+            self.ledger._event(connection, "provider_submission_refused", {"id": job_id, "receipt": receipt})
+
     def record_result(self, job_id, result, artifact_sha256):
         if not SHA256.fullmatch(artifact_sha256):
             raise ValueError("Artifact bundle hash required")

@@ -144,6 +144,20 @@ class ControllerTests(unittest.TestCase):
         with self.assertRaises(LedgerConflict):
             reopened.begin_dispatch("job-one")
 
+    def test_authenticated_provider_refusal_closes_unacknowledged_dispatch(self):
+        self.admit()
+        self.controller.begin_dispatch("job-one")
+        receipt = "provider-refused:" + "e" * 64
+        self.controller.provider_submission_refused("job-one", receipt)
+        self.controller.provider_submission_refused("job-one", receipt)
+        job = self.controller.snapshot()["jobs"][0]
+        self.assertEqual(job["state"], "cleaned")
+        self.assertEqual(job["provider_id"], None)
+        self.assertEqual(job["cleanup_receipt"], receipt)
+        self.assertEqual(self.controller.snapshot()["budget"]["resources"]["modal_micro_usd"]["committed"], 0)
+        with self.assertRaises(LedgerConflict):
+            self.controller.provider_started("job-one", "late-provider")
+
     def test_undispatched_cancellation_refunds_once(self):
         self.admit()
         self.controller.cancel_undispatched("job-one")

@@ -26,6 +26,9 @@ from fps_bench.qwen_lora import verify_adapter as verify_sft_adapter
 GPU = "L4"
 CPU = 4
 MEMORY_MIB = 32768
+KNOWN_CREATE_REFUSALS = {
+    ("InvalidError", "Cannot specify open ports when `block_network` is enabled"),
+}
 
 
 def compute_reservation(rates, seconds, checked_at):
@@ -104,7 +107,7 @@ class ModalServingBackend:
         sandbox = await modal.Sandbox.create.aio(
             "/bin/sleep", str(plan["seconds"]), app=app, image=modal.Image.from_id(plan["image_id"]),
             name=plan["name"], tags=plan["tags"], gpu=GPU, cpu=(CPU, CPU), memory=(MEMORY_MIB, MEMORY_MIB),
-            timeout=plan["seconds"], block_network=True, secrets=[], volumes={"/cache": cache},
+            timeout=plan["seconds"], outbound_cidr_allowlist=[], secrets=[], volumes={"/cache": cache},
             network_file_systems={}, encrypted_ports=[8000], include_oidc_identity_token=False,
             env={"HF_HOME": "/cache/huggingface", "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
                  "HF_HUB_DISABLE_TELEMETRY": "1", "VLLM_NO_USAGE_STATS": "1", "DO_NOT_TRACK": "1"})
@@ -183,13 +186,16 @@ class GameWorldServingLifecycle:
                                "adapter_staged INTEGER NOT NULL DEFAULT 0, "
                                "parent_adapter_staged INTEGER NOT NULL DEFAULT 0, "
                                "server_attempted INTEGER NOT NULL DEFAULT 0, "
-                               "policy_identity TEXT, termination_receipt TEXT)")
+                               "policy_identity TEXT, submission_error TEXT, termination_receipt TEXT)")
             columns = {row["name"] for row in connection.execute(
                 "PRAGMA table_info(gameworld_serving_launches)")}
             if "parent_adapter_staged" not in columns:
                 connection.execute(
                     "ALTER TABLE gameworld_serving_launches ADD COLUMN "
                     "parent_adapter_staged INTEGER NOT NULL DEFAULT 0")
+            if "submission_error" not in columns:
+                connection.execute(
+                    "ALTER TABLE gameworld_serving_launches ADD COLUMN submission_error TEXT")
 
     def stored(self, job_id):
         with self.controller.ledger.transaction() as connection:
@@ -369,6 +375,60 @@ class GameWorldServingLifecycle:
             self.controller.provider_started(job_id, observed["id"])
         return observed["id"]
 
+    def record_submission_error(self, job_id, error):
+        payload = ({"error_type": type(error).__name__, "message": str(error)}
+                   if isinstance(error, BaseException) else error)
+        if (not isinstance(payload, dict) or set(payload) != {"error_type", "message"}
+                or not all(isinstance(payload[name], str) and 0 < len(payload[name]) <= 1000
+                           for name in payload)):
+            raise ValueError("Bounded serving submission error required")
+        encoded = canonical(payload).decode()
+        with self.controller.ledger.transaction() as connection:
+            job = self.controller._job(connection, job_id)
+            launch = connection.execute(
+                "SELECT sandbox_id,submission_error FROM gameworld_serving_launches WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+            if job["state"] != "dispatching" or launch is None or launch["sandbox_id"] is not None:
+                raise LedgerConflict("Serving submission error does not belong to an unacknowledged dispatch")
+            if launch["submission_error"] is not None and launch["submission_error"] != encoded:
+                raise LedgerConflict("Serving submission error identity changed")
+            connection.execute(
+                "UPDATE gameworld_serving_launches SET submission_error=? WHERE job_id=?",
+                (encoded, job_id),
+            )
+        return payload
+
+    async def reconcile_refused_create(self, job_id):
+        job, launch, plan = self.stored(job_id)
+        if job["state"] == "cleaned" and job["cleanup_receipt"].startswith("provider-refused:"):
+            return {"status": "refused", "receipt": job["cleanup_receipt"]}
+        if (job["state"] != "dispatching" or launch["sandbox_id"] is not None
+                or launch["submission_error"] is None):
+            raise LedgerConflict("No provider-refused serving submission is pending reconciliation")
+        error = json.loads(launch["submission_error"])
+        if (error["error_type"], error["message"]) not in KNOWN_CREATE_REFUSALS:
+            raise LedgerConflict("Serving submission remains ambiguous")
+        observed = await asyncio.wait_for(
+            self.backend.lookup(plan["app"], plan["environment"], plan["name"]), 30)
+        if observed is not None:
+            self.acknowledge(job_id, observed)
+            return {"status": "adopted", "sandbox_id": observed["id"]}
+        result = {"status": "refused", "error": error,
+                  "checked_at": datetime.now(timezone.utc).isoformat(),
+                  "app_id": plan["app_id"], "name": plan["name"]}
+        receipt = "provider-refused:" + digest(canonical(result))
+        self.controller.provider_submission_refused(job_id, receipt)
+        root = self.output / job_id
+        root.mkdir(exist_ok=True)
+        path = root / "submission-refusal.json"
+        if path.exists():
+            if path.read_bytes() != canonical(result):
+                raise LedgerConflict("Serving refusal receipt changed")
+        else:
+            exclusive_write(path, canonical(result), 0o400)
+        return {**result, "receipt": receipt}
+
     async def start(self, job_id, api_key):
         if not isinstance(api_key, str) or len(api_key) < 32:
             raise ValueError("Candidate serving API key must contain at least 32 characters")
@@ -385,7 +445,11 @@ class GameWorldServingLifecycle:
                 raise LedgerConflict("Named serving sandbox collision before dispatch")
             await check_scope(self.backend, plan)
             self.controller.begin_dispatch(job_id)
-            observed = await asyncio.wait_for(self.backend.create(plan), 180)
+            try:
+                observed = await asyncio.wait_for(self.backend.create(plan), 180)
+            except BaseException as error:
+                self.record_submission_error(job_id, error)
+                raise
         if observed is None:
             raise LedgerConflict("Ambiguous serving submission; never recreate automatically")
         self.acknowledge(job_id, observed)
