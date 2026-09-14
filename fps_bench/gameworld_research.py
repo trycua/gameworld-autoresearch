@@ -521,12 +521,8 @@ class GameWorldResearchSupervisor:
             if selected is None or selected["id"] != hypothesis:
                 raise LedgerConflict("Only the supervisor-selected hypothesis may start")
             kind = "driver_build" if selected["track"] == "driver" else "training"
-            proposal = json.loads(selected["manifest"])
-            now = int(time.time())
-            deadline = now + proposal["budget"]["timeout_seconds"]
             settings = self._settings(connection)
-            if deadline + 300 > settings["deadline"]:
-                raise BudgetRefused("Action leaves insufficient supervisor cleanup time")
+            deadline = settings["deadline"]
             reservations = {}
             connection.execute("INSERT INTO gameworld_actions VALUES (?,?,?,?,?,'dispatching',NULL,NULL,NULL)",
                                (action_id, hypothesis, kind, deadline, canonical(reservations).decode()))
@@ -615,13 +611,21 @@ class GameWorldResearchSupervisor:
                 "SELECT id,hypothesis,kind,state,provider_id,deadline,reservations FROM gameworld_actions "
                 "WHERE state!='cleaned' ORDER BY id"
             ).fetchall()
-            return [{**dict(row), "reservations": json.loads(row["reservations"]),
-                     "action": {
-                         "dispatching": "reconcile-provider-submission",
-                         "running": "inspect-export-and-request-cleanup",
-                         "cleanup_pending": "release-provider-and-record-receipt",
-                     }.get(row["state"], "inspect")}
-                    for row in rows]
+            actions = []
+            for row in rows:
+                coordinator = str(row["provider_id"] or "").startswith("coordinator:")
+                action = ({
+                    "dispatching": "reconcile-coordinator-claim",
+                    "running": "resume-coordinator-workflow",
+                    "cleanup_pending": "finalize-coordinator-workflow",
+                } if coordinator else {
+                    "dispatching": "reconcile-provider-submission",
+                    "running": "inspect-export-and-request-cleanup",
+                    "cleanup_pending": "release-provider-and-record-receipt",
+                }).get(row["state"], "inspect")
+                actions.append({**dict(row), "reservations": json.loads(row["reservations"]),
+                                "action": action})
+            return actions
 
     def snapshot(self):
         with self.ledger.transaction() as connection:

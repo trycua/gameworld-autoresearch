@@ -24,8 +24,7 @@ training or serving resource that actually owns the GPU lifetime holds and later
 reconciles that allocation. This avoids both unaccounted driver proposals and
 unreconcilable per-Fleet-job Modal reservations.
 
-The CLI is a durable control-plane interface. It admits work but intentionally
-does not yet contain secrets or automatically dispatch provider calls:
+The coordinator CLI is a durable, credential-free control-plane interface:
 
 ```bash
 PYTHONPATH=. python3 -m fps_bench.gameworld_coordinator initialize \
@@ -46,15 +45,43 @@ returns `required_actions`, including exactly-once dispatchable job IDs. Reopeni
 the coordinator with the same campaign, contract, baseline policy and state root
 preserves queues and does not duplicate jobs.
 
+`fps_bench/gameworld_runner.py` is the separate credentialed execution process.
+It consumes stable job IDs, resumes `dispatching`, `running` and `cleanup_pending`
+work without blind resubmission, invokes Fleet build/rollout/evaluation adapters,
+performs Modal SFT/GRPO stage-run-export-cleanup, keeps model serving alive through
+isolated and factorial evaluation, and terminates it after the decision. Baseline
+credentials come from `QWEN_BASE_URL` and `QWEN_API_KEY`; an optional
+`QWEN_CANDIDATE_API_KEY` isolates candidate endpoints. No secret is written to the
+ledger.
+
+Use one bounded pass during supervised bring-up, then `run` only with the
+independent watchdog active:
+
+```bash
+PYTHONPATH=. python3 -m fps_bench.gameworld_runner once \
+  --database /durable/campaign.sqlite \
+  --contract /trusted/contract.json --contract-sha256 "$CONTRACT_SHA256" \
+  --baseline /trusted/suite-baseline-v1 --baseline-policy /trusted/policy.json \
+  --state-root /durable/coordinator --policy configs/gameworld-autoresearch.json \
+  --catalog configs/evaluation/gameworld-suite-v1.json \
+  --campaign gameworld-joint-YYYYMMDD --pool gameworld-autoresearch \
+  --workspace cuaai --environment main --environment-id "$MODAL_ENVIRONMENT_ID" \
+  --training-app gameworld-training --training-app-id "$TRAINING_APP_ID" \
+  --training-image-id "$TRAINING_IMAGE_ID" \
+  --serving-app gameworld-serving --serving-app-id "$SERVING_APP_ID" \
+  --serving-image-id "$SERVING_IMAGE_ID"
+```
+
 Validation:
 
 ```bash
 PYTHONPATH=. .venv/bin/python scripts/gameworld_coordinator_check.py
+PYTHONPATH=. .venv/bin/python scripts/gameworld_runner_check.py
 ```
 
 The offline checks cover driver/GRPO routing, the full 34-game paired and factorial
 queue sizes, comparison isolation, model budget allocation, failed-rollout
 rejection, authenticated SFT training/serving and restart idempotency. They do not
-constitute a live Fleet or Modal campaign. Remaining gates are a credentialed
-provider runner/watchdog, current image/contract publication, live billing
-reconciliation and bounded real vertical slices.
+constitute a live Fleet or Modal campaign. Remaining gates are current image/
+contract publication, production watchdog deployment, live billing reconciliation,
+private split leases, promotion/rollback and bounded real vertical slices.

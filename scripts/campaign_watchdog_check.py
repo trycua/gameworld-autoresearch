@@ -8,8 +8,11 @@ import subprocess
 import sys
 import time
 import unittest
+from unittest.mock import patch
 
 from fps_bench.campaign_watchdog import CampaignWatchdog
+import scripts.campaign_controller_check as controller_fixtures
+import scripts.gameworld_serving_check as serving_fixtures
 import scripts.modal_training_check as fixtures
 
 
@@ -115,6 +118,44 @@ class WatchdogTests(unittest.TestCase):
         snapshot = self.controller.snapshot()
         hold = next(row for row in snapshot["budget"]["reservations"] if row["resource"] == "litellm_tokens")
         self.assertEqual(hold["state"], "held")
+
+    def test_gameworld_evaluation_claim_is_released(self):
+        fixture = controller_fixtures.GameWorldControllerTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        task = fixture.tasks[0]
+        assignment = {"split": "development", "task_id": task["id"], "game": task["game"],
+                      "task": task["task"], "seed": task["seed"], "repeat": 0,
+                      "comparison": "watchdog-evaluation"}
+        fixture.controller.admit_job("evaluation", "baseline", "evaluation", assignment, {}, 600)
+        fixture.controller.begin_dispatch("evaluation")
+        fixture.controller.provider_started("evaluation", "fleet:test/evaluation")
+        fixture.controller.stop("watchdog evaluation test")
+
+        class Fleet:
+            async def release(self, job_id):
+                fixture.controller.provider_cleanup_confirmed(job_id, "fleet-release:" + job_id)
+
+        watchdog = CampaignWatchdog(fixture.controller, fleet_factory=lambda job: Fleet())
+        event = self.run_async(watchdog.tick())[0]
+        self.assertEqual(event["outcome"], "claim_released")
+        self.assertEqual(fixture.controller.snapshot()["jobs"][0]["state"], "cleaned")
+
+    def test_live_candidate_serving_is_terminated(self):
+        fixture = serving_fixtures.ServingTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        with patch("fps_bench.gameworld_serving.authenticated_request",
+                   return_value={"data": [{"id": "model-candidate"}]}):
+            self.run_async(fixture.lifecycle.start("serving-one", "x" * 32))
+        fixture.training.controller.stop("watchdog serving test")
+        watchdog = CampaignWatchdog(
+            fixture.training.controller, modal=fixture.training.lifecycle, serving=fixture.lifecycle)
+        events = {event["job_id"]: event for event in self.run_async(watchdog.tick())}
+        self.assertEqual(events["serving-one"]["outcome"], "serving_terminated_billing_pending")
+        serving = next(job for job in fixture.training.controller.snapshot()["jobs"]
+                       if job["id"] == "serving-one")
+        self.assertEqual(serving["state"], "billing_pending")
 
     def test_independent_process_recovers_expired_local_job(self):
         self.expire()

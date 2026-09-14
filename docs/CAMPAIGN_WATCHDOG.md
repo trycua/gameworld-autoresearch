@@ -9,15 +9,17 @@ the existing controller database. It does not initialize a new campaign.
 python -m fps_bench.campaign_watchdog \
   --database "$CAMPAIGN_DATABASE" \
   --contract "$CONTRACT_PATH" --contract-sha256 "$CONTRACT_SHA256" \
-  --fleet-receipts "$EXISTING_FLEET_RECEIPT_DIRECTORY"
+  --fleet-receipts "$EXISTING_FLEET_RECEIPT_DIRECTORY" \
+  --pool gameworld-autoresearch \
+  --serving-output "$COORDINATOR_STATE_ROOT/serving"
 ```
 
-Use the same receipt directory as the Fleet controller, preserving recorded
-claim ownership. The optional Fleet adapter currently supports only admitted
-`warm-driver-probe` jobs. Modal training cleanup uses persisted launch identity
-and provider tags. Use the approved Fleet/Modal credentials in this trusted
-process, never in researcher environments. Protect its database and credentials
-from candidate workers. Dependencies are the existing Fleet and Modal SDKs.
+Use the same receipt directory as the Fleet runner, preserving recorded claim
+ownership. The Fleet adapter handles driver builds, rollouts and evaluations.
+Modal training and candidate-serving cleanup use persisted sandbox identity and
+provider tags; serving cleanup is disabled unless its exact durable output
+directory is supplied. Use approved Fleet/Modal credentials only in this trusted
+process. Protect its database and credentials from candidate workers.
 
 Every 15 seconds by default, the process checks the persisted campaign stop,
 budget freeze, campaign deadline and job deadlines. It cancels jobs proven never
@@ -29,7 +31,7 @@ prevents duplicate watchdog processes for the same database path.
 
 `--once` performs a bounded recovery pass, exits nonzero if any cleanup is
 unresolved, and can be used after a controller crash. Modal termination retains
-the budget reservation and training slot until authoritative billing settlement.
+the budget reservation until authoritative billing settlement.
 A missing ambiguous create is not refunded or recreated. Unknown job kinds are
 reported as unresolved, not silently considered cleaned. No scale-to-zero
 observation runs; that check was waived by the user.
@@ -38,15 +40,14 @@ observation runs; that check was waived by the user.
 
 `scripts/campaign_watchdog_check.py` exercises deadline cancellation, stop,
 restart, lost create acknowledgement, absent ambiguous create, ownership
-mismatch, cleanup failure/retry, unsupported jobs, and concurrent timeout
-isolation. A credential-free subprocess actually opens and cleans an expired
+mismatch, cleanup failure/retry, Fleet evaluation release, live serving cleanup,
+unsupported jobs, and concurrent timeout isolation. A credential-free subprocess actually opens and cleans an expired
 undispatched job from the durable database and verifies replay after restart.
 Provider operations in these tests are fake; they do not prove live GPU cleanup.
 
 This is not yet a deployed supervisor or an independent host-failure recovery
 system. It cannot access the database after host loss; provider TTL remains the
 last backstop. It does not detect a stalled controller before persisted deadlines.
-Research-process and evaluation-serving cleanup adapters, out-of-band alerts,
-real GPU timeout/termination and live all-in billing reconciliation remain launch
-gates. Emergency termination may lose unexported results; avoiding continued
+Research-process cleanup, out-of-band alerts, real GPU timeout/termination and
+live all-in billing reconciliation remain launch gates. Emergency termination may lose unexported results; avoiding continued
 resource consumption takes priority after a stop or expiry.

@@ -9,15 +9,15 @@ import time
 
 from fps_bench.campaign_controller import CampaignController
 from fps_bench.campaign_ledger import LedgerConflict
-from fps_bench.modal_training import ModalTrainingLifecycle
 
 
 class CampaignWatchdog:
-    def __init__(self, controller, modal=None, fleet_factory=None, operation_timeout=210):
+    def __init__(self, controller, modal=None, fleet_factory=None, serving=None, operation_timeout=210):
         if type(operation_timeout) not in (int, float) or not 0 < operation_timeout <= 240:
             raise ValueError("Cleanup timeout must be in (0, 240] seconds")
         self.controller = controller
         self.modal = modal
+        self.serving = serving
         self.fleet_factory = fleet_factory
         self.operation_timeout = operation_timeout
 
@@ -27,7 +27,8 @@ class CampaignWatchdog:
             frozen = connection.execute("SELECT frozen FROM campaign").fetchone()[0]
             now = time.time()
             jobs = []
-            for row in connection.execute("SELECT * FROM jobs WHERE state!='cleaned' ORDER BY id"):
+            for row in connection.execute(
+                    "SELECT * FROM jobs WHERE state NOT IN ('billing_pending','cleaned') ORDER BY id"):
                 if frozen or settings["stopped"] or now >= min(settings["deadline"], row["deadline"]):
                     jobs.append(dict(row))
             return jobs
@@ -39,10 +40,16 @@ class CampaignWatchdog:
             return "cancelled_undispatched"
         if job["kind"] == "training":
             if self.modal is None:
-                self.modal = ModalTrainingLifecycle(self.controller)
+                from fps_bench.gameworld_modal import GameWorldModalTrainingLifecycle
+                self.modal = GameWorldModalTrainingLifecycle(self.controller)
             await self.modal.terminate(job_id)
             return "terminated_billing_pending"
-        if job["kind"] == "driver_build" and self.fleet_factory is not None:
+        if job["kind"] == "serving":
+            if self.serving is None:
+                raise LedgerConflict("Serving cleanup requires its pinned durable output directory")
+            await self.serving.terminate(job_id)
+            return "serving_terminated_billing_pending"
+        if job["kind"] in ("driver_build", "rollout", "evaluation") and self.fleet_factory is not None:
             fleet = self.fleet_factory(job)
             await fleet.release(job_id)
             return "claim_released"
@@ -72,6 +79,8 @@ def main():
     parser.add_argument("--contract", type=Path, required=True)
     parser.add_argument("--contract-sha256", required=True)
     parser.add_argument("--fleet-receipts", type=Path)
+    parser.add_argument("--pool", default="gameworld-autoresearch")
+    parser.add_argument("--serving-output", type=Path)
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--interval", type=int, default=15)
     args = parser.parse_args()
@@ -89,9 +98,15 @@ def main():
         def fleet_factory(job):
             from fps_bench.fleet_provider import FleetLifecycle
             assignment = json.loads(job["specification"])["assignment"]
-            return FleetLifecycle(controller, assignment["pool"], args.fleet_receipts)
+            return FleetLifecycle(controller, assignment.get("pool", args.pool), args.fleet_receipts)
 
-    watchdog = CampaignWatchdog(controller, fleet_factory=fleet_factory)
+    serving = None
+    if args.serving_output:
+        if not args.serving_output.is_dir():
+            parser.error("Serving output directory must already exist")
+        from fps_bench.gameworld_serving import GameWorldServingLifecycle
+        serving = GameWorldServingLifecycle(controller, args.serving_output)
+    watchdog = CampaignWatchdog(controller, fleet_factory=fleet_factory, serving=serving)
 
     async def watch():
         while True:

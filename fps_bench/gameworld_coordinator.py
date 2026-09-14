@@ -454,6 +454,43 @@ class GameWorldCoordinator:
         self._set_workflow(workflow["proposal_id"], state="complete" if qualified else "rejected",
                            candidate_id=candidate_id, decision=evidence)
 
+    def emit_evaluation(self, workflow, candidate_id, decision, phase):
+        telemetry = self.supervisor.telemetry
+        if telemetry is None:
+            return None
+        try:
+            with self.controller.ledger.transaction() as connection:
+                rows = []
+                for job in connection.execute(
+                        "SELECT specification,result FROM jobs WHERE kind='evaluation'"):
+                    assignment = json.loads(job["specification"])["assignment"]
+                    if assignment.get("comparison") == workflow["comparison"] and job["result"]:
+                        rows.append(json.loads(job["result"])["result"])
+            complete = [row for row in rows if row.get("status") == "complete"]
+            values = {
+                "gameworld_eval_completed_episodes": len(complete),
+                "gameworld_eval_failed_episodes": len(rows) - len(complete),
+                "gameworld_eval_seconds": sum(row.get("seconds", 0) for row in complete),
+            }
+            candidate_rows = [row for row in complete if row.get("candidate") == candidate_id]
+            if candidate_rows:
+                values["gameworld_eval_success_rate"] = sum(row["success"] for row in candidate_rows) / len(candidate_rows)
+                progress = [row.get("progress") for row in candidate_rows
+                            if type(row.get("progress")) in (int, float)]
+                if progress:
+                    values["gameworld_eval_mean_progress"] = sum(progress) / len(progress)
+            candidate = self._candidate(candidate_id)
+            telemetry.record(
+                "evaluation-" + digest(canonical([workflow["comparison"], candidate_id]))[:32],
+                "gameworld-eval",
+                {"experiment": candidate_id, "phase": phase, "split": "development",
+                 "change_class": candidate["change_class"], "outcome": decision["decision"]},
+                values,
+            )
+            return telemetry.flush()
+        except Exception as error:
+            return {"metrics": False, "logs": False, "errors": [{"type": type(error).__name__}]}
+
     def advance(self, action_id=None):
         self.sync()
         with self.controller.ledger.transaction() as connection:
@@ -536,6 +573,7 @@ class GameWorldCoordinator:
                 if items and all(item["state"] == "complete" for item in items):
                     if workflow["track"] == "joint":
                         decision = self.controller.decide_factorial(workflow["candidate_id"])
+                        self.emit_evaluation(workflow, workflow["candidate_id"], decision, "factorial")
                         self._set_workflow(proposal_id, state="awaiting_serving_stop", decision=decision)
                         owner = workflow["details"]["serving_owner"]
                         with self.controller.ledger.transaction() as connection:
@@ -543,6 +581,7 @@ class GameWorldCoordinator:
                         self._set_workflow(owner, state="awaiting_serving_stop", decision=model["decision"])
                     else:
                         decision = self.controller.decide_development(workflow["candidate_id"])
+                        self.emit_evaluation(workflow, workflow["candidate_id"], decision, "paired")
                         if workflow["track"] == "driver":
                             self._finalize(workflow, workflow["candidate_id"],
                                            decision["decision"] == "nominate", decision)
@@ -626,11 +665,15 @@ class GameWorldCoordinator:
         return self.workflow(workflow["proposal_id"])
 
     def dispatchable(self):
+        return [row for row in self.runnable() if row["state"] == "reserved"]
+
+    def runnable(self):
         with self.controller.ledger.transaction() as connection:
             rows = [dict(row) for row in connection.execute(
                 "SELECT q.workflow,q.phase,q.job_id,q.kind,q.assignment,q.reservations,j.state "
                 "FROM gameworld_work_items q JOIN jobs j ON j.id=q.job_id "
-                "WHERE q.state='admitted' AND j.state='reserved' ORDER BY q.workflow,q.phase,q.ordinal"
+                "WHERE q.state='admitted' AND j.state IN ('reserved','dispatching','running','cleanup_pending') "
+                "ORDER BY q.workflow,q.phase,q.ordinal"
             )]
         for row in rows:
             row["assignment"] = json.loads(row["assignment"])
@@ -659,7 +702,8 @@ class GameWorldCoordinator:
                 owner = workflow["details"].get("serving_owner", workflow["proposal_id"])
                 actions.append({"workflow": workflow["proposal_id"], "action": "terminate-serving", "owner": owner})
         actions.extend({"workflow": row["workflow"], "job_id": row["job_id"],
-                        "action": "dispatch-" + row["kind"]} for row in self.dispatchable())
+                        "action": ("dispatch-" if row["state"] == "reserved" else "resume-") + row["kind"]}
+                       for row in self.runnable())
         return actions
 
     def snapshot(self):
