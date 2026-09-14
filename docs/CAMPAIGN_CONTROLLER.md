@@ -2,12 +2,13 @@
 
 ## Status
 
-`fps_bench/campaign_controller.py` implements durable controller state and an
-integrated **offline** development-round rehearsal. It is not yet a production
-worker loop. There are no live provider adapters, authenticated worker-result
-endpoint, Fleet source-patch builder, trainer dispatcher, automatic watchdog or
-promotion implementation. Private confirmation/sealed job admission and joint
-candidate registration deliberately fail until their remaining gates exist.
+`fps_bench/campaign_controller.py` implements durable controller state, while
+`fps_bench/gameworld_coordinator.py` persists the GameWorld driver, GRPO, serving,
+paired-development and qualified-factorial workflow queues. Fleet source-patch,
+rollout/evaluation, Modal training and adapter-serving adapters exist and validate
+immutable results. The remaining production gap is the credentialed provider
+runner/watchdog plus live vertical-slice evidence, SFT ingestion, billing closure,
+private split leases and promotion/rollback.
 
 Do not substitute the synthetic rehearsal for the live launch rehearsal. Linear:
 CUA-1172, with budget integration in CUA-1167 and the final rehearsal in CUA-1176.
@@ -63,13 +64,13 @@ is unique per candidate/seed/repetition; hidden retries cannot be substituted.
 
 ## Decisions and recovery
 
-The development decision uses only recorded, cleaned jobs for the candidate and
-its parent. Missing/infrastructure-failed results cannot nominate; other invalid
-inputs are rejected by the frozen paired-result function. Decision inputs and
-outcomes are immutable. A losing candidate is marked rejected, while an eligible
-candidate is marked nominated. **Neither path changes the champion or serves a
-new model.** Confirmation-use limits, authenticated artifact ingestion/replay,
-qualified factorial comparisons, promotion and rollback are still required.
+The development decision uses only recorded, provider-cleaned jobs for the
+candidate and its parent under the candidate's comparison identity. Missing or
+infrastructure-failed results cannot nominate. Qualified isolated driver and model
+candidates can be registered as a joint candidate and evaluated through a fresh
+2x2 factorial comparison. Decision inputs and outcomes are immutable. **No path
+changes the champion automatically.** Confirmation-use limits, private leases,
+promotion and rollback remain required.
 
 `recovery_actions` reports actionable states:
 

@@ -13,6 +13,7 @@ from fps_bench.gameworld_suite_episode import DRIVER as BASELINE_DRIVER_SHA256
 SOURCE_FILES = (
     "fps_bench/campaign_controller.py",
     "fps_bench/evaluation_contract.py",
+    "fps_bench/gameworld_coordinator.py",
     "fps_bench/gameworld_evaluation.py",
     "fps_bench/gameworld_candidate_episode.py",
     "fps_bench/gameworld_grpo.py",
