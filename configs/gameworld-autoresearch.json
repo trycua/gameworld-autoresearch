@@ -53,6 +53,9 @@
     "litellm_tokens": 1000000000,
     "desktop_concurrency": 2,
     "training_concurrency": 1,
+    "baseline_serving_micro_usd": 10000000,
+    "minimum_serving_micro_usd": 10000000,
+    "serving_seconds": 3600,
     "campaign_seconds": 21600
   }
 }

@@ -90,6 +90,25 @@ class CoordinatorTests(unittest.TestCase):
         if cleanup:
             controller.provider_cleanup_confirmed(job_id, "cleanup:" + job_id)
 
+    def start_baseline_serving(self, proposal_id):
+        workflow = self.coordinator.workflow(proposal_id)
+        item = self.coordinator._items(proposal_id, workflow["details"]["baseline_serving_phase"])[0]
+        admitted = self.coordinator.admit_ready(1)[0]["job_id"]
+        self.assertEqual(admitted, item["job_id"])
+        self.finish_job(admitted, {"status": "complete", "candidate_id": item["candidate"],
+                                   "adapter_manifest_sha256": None,
+                                   "policy_sha256": item["assignment"]["policy_sha256"]}, cleanup=False)
+        return self.coordinator.advance()
+
+    def stop_baseline_serving(self, proposal_id):
+        workflow = self.coordinator.workflow(proposal_id)
+        job_id = self.coordinator._items(
+            proposal_id, workflow["details"]["baseline_serving_phase"])[0]["job_id"]
+        self.coordinator.controller.provider_cleanup_confirmed(job_id, "cleanup:" + job_id)
+        self.coordinator.controller.settle_job(
+            job_id, {"modal_micro_usd": 0}, "billing:" + job_id)
+        return self.coordinator.advance()
+
     def test_driver_patch_routes_to_paired_full_gameworld_evaluation(self):
         proposal = self.fixture.driver_proposal()
         self.coordinator.register(proposal)
@@ -107,7 +126,10 @@ class CoordinatorTests(unittest.TestCase):
         self.coordinator.controller.register_candidate(candidate)
         self.finish_job(build, {"status": "complete", "candidate_id": candidate["id"],
                                 "driver_sha256": candidate["driver_sha256"]})
-        self.assertEqual(self.coordinator.advance(), [{"workflow": proposal["id"], "state": "evaluating"}])
+        self.assertEqual(self.coordinator.advance(), [{
+            "workflow": proposal["id"], "state": "starting_baseline_serving"}])
+        self.assertEqual(self.start_baseline_serving(proposal["id"]), [{
+            "workflow": proposal["id"], "state": "evaluating"}])
         items = self.coordinator._items(proposal["id"], "development")
         self.assertEqual(len(items), 136)
         self.assertEqual(sum(item["candidate"] == "baseline" for item in items), 68)
@@ -133,11 +155,13 @@ class CoordinatorTests(unittest.TestCase):
         proposal = self.fixture.model_proposal()
         self.coordinator.register(proposal)
         self.coordinator.start_next("model-action")
+        self.assertEqual(len(self.coordinator._items(proposal["id"], "baseline-serving-rollout")), 1)
+        self.start_baseline_serving(proposal["id"])
         self.assertEqual(len(self.coordinator._items(proposal["id"], "rollout")), 1)
         self.assertEqual(self.coordinator.workflow(proposal["id"])["details"]["modal_allocation"], {
-            "training_micro_usd": 5_000_000, "serving_micro_usd": 5_000_000,
+            "training_micro_usd": 5_000_000, "serving_micro_usd": 10_000_000,
         })
-        self.coordinator.allocate_model_budget("model-action", 5_000_000, 5_000_000)
+        self.coordinator.allocate_model_budget("model-action", 5_000_000, 10_000_000)
         rollout = self.coordinator.admit_ready(1)[0]["job_id"]
         artifact = self.root / "coordinator/fleet" / rollout
         artifact.mkdir(parents=True)
@@ -147,6 +171,9 @@ class CoordinatorTests(unittest.TestCase):
                                   "contract_sha256": self.contract_hash, "status": "complete",
                                   "dataset_sha256": "8" * 64})
         self.coordinator.advance()
+        self.assertEqual(self.coordinator.workflow(proposal["id"])["state"],
+                         "awaiting_baseline_serving_stop")
+        self.stop_baseline_serving(proposal["id"])
         self.assertEqual(self.coordinator.workflow(proposal["id"])["state"], "awaiting_dataset")
         self.coordinator.prepare_training_dataset("model-action")
         training = self.coordinator.admit_ready(1)[0]["job_id"]
@@ -173,7 +200,7 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(len(items), 136)
         self.assertEqual({item["candidate"] for item in items}, {"baseline", served_model})
         self.assertEqual(self.coordinator.controller.snapshot()["budget"]["resources"]["modal_micro_usd"]["committed"],
-                         10_000_000)
+                         15_000_000)
 
     def test_sft_attaches_authenticated_dataset_without_invalid_grpo_rollout(self):
         proposal = self.fixture.model_proposal("model-sft")
@@ -184,7 +211,7 @@ class CoordinatorTests(unittest.TestCase):
         self.coordinator.start_next("sft-action")
         self.assertEqual(self.coordinator._items(proposal["id"]), [])
         self.assertEqual(self.coordinator.required_actions()[0]["action"], "attach-authenticated-sft-dataset")
-        self.coordinator.allocate_model_budget("sft-action", 5_000_000, 5_000_000)
+        self.coordinator.allocate_model_budget("sft-action", 5_000_000, 10_000_000)
         task = proposal["experiment"]["training_tasks"][0]
         dataset = self.root / "sft-dataset"
         (dataset / "images").mkdir(parents=True)
@@ -228,12 +255,16 @@ class CoordinatorTests(unittest.TestCase):
         proposal = self.fixture.model_proposal("failed-rollout")
         self.coordinator.register(proposal)
         self.coordinator.start_next("failed-action")
+        self.start_baseline_serving(proposal["id"])
         rollout = self.coordinator.admit_ready(1)[0]["job_id"]
         assignment = self.coordinator._items(proposal["id"], "rollout")[0]["assignment"]
         self.finish_job(rollout, {**assignment, "candidate": "baseline",
                                   "contract_sha256": self.contract_hash,
                                   "status": "failed", "error_type": "WorkerError"})
         self.coordinator.advance()
+        self.assertEqual(self.coordinator.workflow(proposal["id"])["state"],
+                         "awaiting_baseline_serving_stop")
+        self.stop_baseline_serving(proposal["id"])
         self.assertEqual(self.coordinator.workflow(proposal["id"])["state"], "rejected")
         self.assertEqual(self.coordinator._items(proposal["id"], "training"), [])
 
@@ -288,6 +319,9 @@ class CoordinatorTests(unittest.TestCase):
             )
         workflow = self.coordinator.start_confirmation(
             "confirmed-driver-action", "confirmed-driver-lease", 31)
+        self.assertEqual(workflow["state"], "starting_baseline_serving")
+        self.start_baseline_serving(workflow["proposal_id"])
+        workflow = self.coordinator.workflow(workflow["proposal_id"])
         self.assertEqual(workflow["state"], "confirming")
         items = self.coordinator._items(workflow["proposal_id"], "confirmation")
         self.assertEqual(len(items), 68)
@@ -308,12 +342,18 @@ class CoordinatorTests(unittest.TestCase):
             self.coordinator.sync()
         self.coordinator.advance("confirmed-driver-action")
         workflow = self.coordinator.workflow("confirmed-driver-action")
+        self.assertEqual(workflow["state"], "awaiting_baseline_serving_stop")
+        self.stop_baseline_serving(workflow["proposal_id"])
+        workflow = self.coordinator.workflow("confirmed-driver-action")
         self.assertEqual(workflow["state"], "complete")
         self.assertEqual(workflow["decision"]["decision"], "confirmation_pass")
         self.coordinator.promote("confirmed-driver-action", "coordinator-confirmation-receipt")
         self.assertEqual(self.coordinator.controller.snapshot()["controller"]["champion"], candidate["id"])
 
         sealed = self.coordinator.start_sealed("sealed-final", 37)
+        self.assertEqual(sealed["state"], "starting_baseline_serving")
+        self.start_baseline_serving(sealed["proposal_id"])
+        sealed = self.coordinator.workflow(sealed["proposal_id"])
         self.assertEqual(sealed["state"], "sealed_evaluating")
         while True:
             pending = [item for item in self.coordinator._items(sealed["proposal_id"], "sealed")
@@ -329,6 +369,9 @@ class CoordinatorTests(unittest.TestCase):
                 self.finish_job(item["job_id"], result)
             self.coordinator.sync()
         self.coordinator.advance(sealed["proposal_id"])
+        sealed = self.coordinator.workflow(sealed["proposal_id"])
+        self.assertEqual(sealed["state"], "awaiting_baseline_serving_stop")
+        self.stop_baseline_serving(sealed["proposal_id"])
         sealed = self.coordinator.workflow(sealed["proposal_id"])
         self.assertEqual(sealed["state"], "complete")
         self.assertEqual(sealed["decision"]["episodes"], 34)

@@ -128,9 +128,9 @@ class SupervisorTests(unittest.TestCase):
                 "rollouts_per_task": 2, "max_trajectory_steps": 4, "optimizer_steps": 2,
                 "sft_source_id": None,
             },
-            "budget": {"modal_micro_usd": 10_000_000,
+            "budget": {"modal_micro_usd": 15_000_000,
                        "modal_training_micro_usd": 5_000_000,
-                       "modal_serving_micro_usd": 5_000_000,
+                       "modal_serving_micro_usd": 10_000_000,
                        "litellm_tokens": 1000, "desktop_episodes": 68,
                        "timeout_seconds": 600},
         }

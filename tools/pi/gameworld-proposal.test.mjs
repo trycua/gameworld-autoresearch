@@ -19,7 +19,7 @@ const context = {
     driver: { required_contract_tests: ['build', 'focus', 'held-keys', 'key-release', 'mouse-delivery'] },
     model: { minimum_grpo_group_size: 2, maximum_grpo_group_size: 8,
       maximum_trajectory_steps: 60, maximum_optimizer_steps: 32 },
-    limits: { modal_micro_usd_normal: 1800000000 },
+    limits: { modal_micro_usd_normal: 1800000000, minimum_serving_micro_usd: 10000000 },
   },
   budget: {
     litellm_tokens: { normal_remaining: 1000000000 },
@@ -54,12 +54,12 @@ test('model proposal has explicit exact training and serving reservations', () =
   const proposal = assembleProposal({ ...common, objective: 'grpo', training_tasks: context.splits.train,
     rollouts_per_task: 2, max_trajectory_steps: 4, optimizer_steps: 2,
     sft_source_id: null,
-    modal_training_micro_usd: 8000000, modal_serving_micro_usd: 2000000,
+    modal_training_micro_usd: 8000000, modal_serving_micro_usd: 10000000,
   }, modelContext, sources, '2026-09-14T00:00:00.000Z');
   assert.equal(proposal.track, 'model');
-  assert.equal(proposal.budget.modal_micro_usd, 10000000);
+  assert.equal(proposal.budget.modal_micro_usd, 18000000);
   assert.equal(proposal.budget.modal_training_micro_usd, 8000000);
-  assert.equal(proposal.budget.modal_serving_micro_usd, 2000000);
+  assert.equal(proposal.budget.modal_serving_micro_usd, 10000000);
 });
 
 test('unverified references and unsupported SFT are rejected', () => {
@@ -71,7 +71,7 @@ test('unverified references and unsupported SFT are rejected', () => {
   assert.throws(() => assembleProposal({ ...common, objective: 'sft', training_tasks: context.splits.train,
     rollouts_per_task: 1, max_trajectory_steps: 4, optimizer_steps: 2,
     sft_source_id: 'approved-source',
-    modal_training_micro_usd: 8000000, modal_serving_micro_usd: 2000000,
+    modal_training_micro_usd: 8000000, modal_serving_micro_usd: 10000000,
   }, modelContext, sources, '2026-09-14T00:00:00.000Z'), /without an authenticated source/);
 });
 

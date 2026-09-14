@@ -67,6 +67,10 @@ export function proposalCoreSchema(context, sources) {
     context.budget.modal_micro_usd.normal_remaining,
   );
   const allocationMaximum = Math.floor(modalRemaining / 2);
+  const servingMinimum = context.policy.limits.minimum_serving_micro_usd;
+  if (allocationMaximum < servingMinimum) {
+    throw new Error('Remaining Modal budget cannot fund managed serving.');
+  }
   return object({
     ...common,
     objective: { type: 'string', enum: context.sft_sources.length ? ['sft', 'grpo'] : ['grpo'] },
@@ -78,7 +82,7 @@ export function proposalCoreSchema(context, sources) {
       ? { type: ['string', 'null'], enum: [null, ...context.sft_sources.map((source) => source.id)] }
       : { type: 'null' },
     modal_training_micro_usd: integer(1, allocationMaximum),
-    modal_serving_micro_usd: integer(1, allocationMaximum),
+    modal_serving_micro_usd: integer(servingMinimum, allocationMaximum),
   });
 }
 

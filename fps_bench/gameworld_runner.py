@@ -5,7 +5,6 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from fps_bench.campaign_ledger import LedgerConflict
 from fps_bench.evaluation_contract import canonical, digest
@@ -37,15 +36,9 @@ class GameWorldProviderRunner:
         if any(not isinstance(value, str) or not value for value in modal_config.values()):
             raise ValueError("Runner Modal identities must be nonempty strings")
         self.modal_config = modal_config
-        endpoint = qwen_environment.get("QWEN_BASE_URL", "").rstrip("/")
-        parsed = urlsplit(endpoint)
-        if (parsed.scheme != "https" or parsed.username or parsed.password
-                or len(qwen_environment.get("QWEN_API_KEY", "")) < 32):
-            raise ValueError("Runner requires credentialed HTTPS baseline Qwen serving")
-        self.baseline_qwen = {"QWEN_BASE_URL": endpoint, "QWEN_API_KEY": qwen_environment["QWEN_API_KEY"]}
-        self.candidate_api_key = candidate_api_key or qwen_environment["QWEN_API_KEY"]
+        self.candidate_api_key = candidate_api_key or qwen_environment.get("QWEN_API_KEY", "")
         if len(self.candidate_api_key) < 32:
-            raise ValueError("Candidate serving API key is missing or too short")
+            raise ValueError("Managed serving API key is missing or too short")
         self.fleet_lifecycle = fleet_lifecycle or FleetLifecycle(
             self.controller, coordinator.pool, coordinator.state_root / "fleet-provider")
         self.fleet = fleet_executor or GameWorldFleetExecutor(
@@ -79,11 +72,26 @@ class GameWorldProviderRunner:
             return self._workflow(row["proposal_id"])
         return None
 
-    def policy_path(self, candidate_id):
+    def serving_job(self, workflow_id):
+        workflow = self._workflow(workflow_id)
+        details = workflow["details"]
+        if "serving_job" in details:
+            return details["serving_job"]
+        if "baseline_serving_job" in details:
+            return details["baseline_serving_job"]
+        owner = details.get("serving_owner")
+        if owner is not None:
+            return self.serving_job(owner)
+        raise LedgerConflict("Workflow has no live serving owner")
+
+    def policy_path(self, candidate_id, workflow_id):
         candidate = self._candidate(candidate_id)
-        workflow = self._model_workflow(candidate_id)
-        path = (self.coordinator.state_root / "inputs/baseline-policy.json" if workflow is None
-                else Path(workflow["details"]["policy_path"]))
+        serving_job = self.serving_job(workflow_id)
+        adapter = candidate["model"]["adapter_sha256"] is not None
+        name = "policy.json" if adapter else "base-policy.json"
+        path = self.coordinator.state_root / "serving" / serving_job / name
+        if name == "base-policy.json" and not path.is_file():
+            path = self.coordinator.state_root / "serving" / serving_job / "policy.json"
         data = path.read_bytes()
         if policy_digest(json.loads(data)) != candidate["policy_sha256"]:
             raise LedgerConflict("Candidate policy bytes differ from the controller manifest")
@@ -102,18 +110,15 @@ class GameWorldProviderRunner:
             raise LedgerConflict("Candidate driver binary differs from its materialized manifest")
         return path
 
-    async def qwen_environment(self, candidate_id):
-        workflow = self._model_workflow(candidate_id)
-        if workflow is None:
-            return self.baseline_qwen.copy()
-        serving_job = workflow["details"]["serving_job"]
+    async def qwen_environment(self, candidate_id, workflow_id):
+        serving_job = self.serving_job(workflow_id)
         _, launch, _ = self.serving.stored(serving_job)
         if not launch["sandbox_id"]:
             raise LedgerConflict("Model serving sandbox is not acknowledged")
         observed = await asyncio.wait_for(self.serving.backend.inspect(launch["sandbox_id"]), 30)
         self.serving.acknowledge(serving_job, observed)
         endpoint = observed.get("endpoint", "").rstrip("/")
-        policy = json.loads(self.policy_path(candidate_id).read_bytes())
+        policy = json.loads(self.policy_path(candidate_id, workflow_id).read_bytes())
         if (not endpoint or digest(endpoint.encode()) != policy["deployment"]["endpoint_sha256"]
                 or observed.get("returncode") is not None):
             raise LedgerConflict("Live candidate endpoint differs from the policy identity")
@@ -140,8 +145,8 @@ class GameWorldProviderRunner:
                 return await self.fleet.driver_candidate(
                     row["job_id"], workflow["details"]["proposal_path"], workflow["details"]["patch_path"])
             candidate_id = self._job_candidate(row["job_id"])
-            policy = self.policy_path(candidate_id)
-            qwen = await self.qwen_environment(candidate_id)
+            policy = self.policy_path(candidate_id, row["workflow"])
+            qwen = await self.qwen_environment(candidate_id, row["workflow"])
             driver = self.driver_binary(candidate_id)
             if row["kind"] == "rollout":
                 return await self.fleet.rollout(row["job_id"], policy, qwen, driver)
@@ -201,13 +206,17 @@ class GameWorldProviderRunner:
     async def dispatch_serving(self, row):
         config = self.modal_config
         assignment = row["assignment"]
-        output = self.coordinator.state_root / "modal" / assignment["training_job"]
         try:
-            await self.serving.prepare(
-                row["job_id"], output, workspace=config["workspace"], app=config["serving_app"],
-                environment=config["environment"], environment_id=config["environment_id"],
-                image_id=config["serving_image_id"], app_id=config["serving_app_id"],
-                isolation_policy="app-scoped")
+            common = {"workspace": config["workspace"], "app": config["serving_app"],
+                      "environment": config["environment"], "environment_id": config["environment_id"],
+                      "image_id": config["serving_image_id"], "app_id": config["serving_app_id"],
+                      "isolation_policy": "app-scoped"}
+            if assignment.get("mode") == "baseline":
+                await self.serving.prepare_baseline(
+                    row["job_id"], self.coordinator.state_root / "inputs/baseline-policy.json", **common)
+            else:
+                output = self.coordinator.state_root / "modal" / assignment["training_job"]
+                await self.serving.prepare(row["job_id"], output, **common)
             return await self.serving.start(row["job_id"], self.candidate_api_key)
         except BaseException:
             await self.cleanup_serving_job(row["job_id"])
@@ -286,15 +295,19 @@ class GameWorldProviderRunner:
             if action["action"] != "terminate-serving" or action["owner"] in seen:
                 continue
             seen.add(action["owner"])
-            serving = self.coordinator._items(action["owner"], "serving")
-            if len(serving) != 1:
-                raise LedgerConflict("Serving cleanup owner lost its one admitted serving job")
+            if action.get("job_id"):
+                jobs = [action["job_id"]]
+            else:
+                serving = self.coordinator._items(action["owner"], "serving")
+                if len(serving) != 1:
+                    raise LedgerConflict("Serving cleanup owner lost its one admitted serving job")
+                jobs = [serving[0]["job_id"]]
             try:
-                await self.cleanup_serving_job(serving[0]["job_id"])
-                event = {"workflow": action["owner"], "job_id": serving[0]["job_id"],
+                await self.cleanup_serving_job(jobs[0])
+                event = {"workflow": action["owner"], "job_id": jobs[0],
                          "outcome": "serving-terminated"}
             except Exception as error:
-                event = {"workflow": action["owner"], "job_id": serving[0]["job_id"],
+                event = {"workflow": action["owner"], "job_id": jobs[0],
                          "outcome": "unresolved", "error_type": type(error).__name__}
             with self.controller.ledger.transaction() as connection:
                 self.controller.ledger._event(connection, "gameworld_runner_serving_cleanup", event)
@@ -386,8 +399,7 @@ def main():
     parser.add_argument("--maximum", type=int, default=2)
     parser.add_argument("--max-cycles", type=int, default=10000)
     args = parser.parse_args()
-    qwen = {"QWEN_BASE_URL": os.environ.get("QWEN_BASE_URL", ""),
-            "QWEN_API_KEY": os.environ.get("QWEN_API_KEY", "")}
+    qwen = {"QWEN_API_KEY": os.environ.get("QWEN_API_KEY", "")}
     coordinator = GameWorldCoordinator(
         args.database, args.contract, args.contract_sha256, args.baseline, args.state_root,
         args.policy, args.catalog, args.telemetry, args.pool, private_splits=args.private_splits)

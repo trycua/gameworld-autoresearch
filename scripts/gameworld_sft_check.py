@@ -39,7 +39,7 @@ class GameWorldSFTTests(unittest.TestCase):
         self.proposal["experiment"]["sft_source_id"] = "vertical-sft-source"
         self.coordinator.register(self.proposal)
         self.coordinator.start_next("sft-action")
-        self.coordinator.allocate_model_budget("sft-action", 5_000_000, 5_000_000)
+        self.coordinator.allocate_model_budget("sft-action", 5_000_000, 10_000_000)
         self.registry = GameWorldTrainingRegistry(
             self.controller, self.fixture.fixture.policy, self.fixture.fixture.catalog)
         self.coordinator.registry = self.registry

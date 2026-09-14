@@ -7,11 +7,12 @@ must not receive direct database access.
 
 The coordinator currently persists and validates these paths:
 
-- Driver proposal -> allowlisted patch -> Fleet build/contract job -> immutable
-  driver candidate -> 68 candidate plus 68 paired-baseline development episodes.
-- GRPO proposal -> one grouped Fleet rollout per selected train task -> authenticated
-  combined dataset -> Modal training -> immutable adapter serving -> the same 136
-  paired development episodes.
+- Driver proposal -> allowlisted patch -> Fleet build/contract job -> controller-owned
+  base-model serving -> immutable driver candidate -> 68 candidate plus 68 paired-baseline
+  development episodes -> serving termination and billing reconciliation.
+- GRPO proposal -> controller-owned base-model serving -> one grouped Fleet rollout per
+  selected train task -> serving termination -> authenticated combined dataset -> Modal
+  training -> immutable adapter serving -> the same 136 paired development episodes.
 - Qualified driver plus live qualified model -> fresh comparison identity -> all
   272 cells of the 2x2 baseline/driver/model/joint development schedule.
 - Nominated isolated or joint candidate -> controller-issued private confirmation
@@ -24,9 +25,12 @@ The coordinator currently persists and validates these paths:
   frozen driver/contract identity. They then use the same Modal export, adapter
   serving and paired evaluation path as GRPO.
 
-Fleet build, rollout and evaluation jobs do not reserve Modal dollars. The Modal
-training or serving resource that actually owns the GPU lifetime holds and later
-reconciles that allocation. This avoids both unaccounted driver proposals and
+Fleet build, rollout and evaluation jobs do not reserve Modal dollars. A distinct
+controller-admitted serving job owns each base-model or adapter GPU lifetime and
+later reconciles that allocation. Base serving has a fixed `$10` hold and one-hour
+maximum, stops before training, and restarts for protected driver evaluations.
+Adapter vLLM advertises both the frozen base name and candidate LoRA name so paired
+and factorial cells share one GPU. This avoids unaccounted inference and
 unreconcilable per-Fleet-job Modal reservations.
 
 The coordinator CLI is a durable, credential-free control-plane interface:
@@ -59,13 +63,13 @@ the coordinator CLI nor the provider runner exposes a production bypass.
 `fps_bench/gameworld_runner.py` is the separate credentialed execution process.
 It consumes stable job IDs, resumes `dispatching`, `running` and `cleanup_pending`
 work without blind resubmission, invokes Fleet build/rollout/evaluation adapters,
-performs Modal SFT/GRPO stage-run-export-cleanup, keeps model serving alive through
-isolated and factorial evaluation, and terminates it after the decision. Model
-proposals carry exact training and serving reservation splits, so no operator can
-choose a different allocation after proposal approval. Baseline
-credentials come from `QWEN_BASE_URL` and `QWEN_API_KEY`; an optional
-`QWEN_CANDIDATE_API_KEY` isolates candidate endpoints. No secret is written to the
-ledger.
+performs Modal SFT/GRPO stage-run-export-cleanup, starts and stops budgeted baseline
+serving around driver/rollout work, keeps candidate serving alive through isolated
+and factorial evaluation, and terminates it after the decision. Model proposals
+carry exact training and serving reservation splits, so no operator can choose a
+different allocation after proposal approval. `QWEN_API_KEY` authenticates all
+controller-created endpoints; optional `QWEN_CANDIDATE_API_KEY` uses a distinct key
+for them. No external baseline URL or secret is written to the ledger.
 
 With `--enable-research`, the runner invokes the isolated Pi research profile when
 the campaign is idle. Browser-verified sources feed one schema-constrained

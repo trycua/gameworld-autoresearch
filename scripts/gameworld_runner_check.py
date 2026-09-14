@@ -93,6 +93,75 @@ class FleetExecutor:
         raise AssertionError("Driver runner check must not dispatch rollouts")
 
 
+class ServingLifecycle:
+    def __init__(self, coordinator):
+        self.coordinator = coordinator
+        self.controller = coordinator.controller
+        self.output = coordinator.state_root / "serving"
+        self.output.mkdir(parents=True, exist_ok=True)
+        self.backend = self
+        self.launches = {}
+
+    async def prepare_baseline(self, job_id, policy_path, **config):
+        identity = json.loads(Path(policy_path).read_bytes())
+        plan = {"policy": {key: identity[key] for key in (
+                    "base_model", "base_revision", "adapter_sha256", "served_model", "generation")},
+                "tags": {"job": job_id}, **config}
+        previous = self.launches.get(job_id, {}).get("plan")
+        if previous is not None and previous != plan:
+            raise AssertionError("managed serving plan changed")
+        self.launches.setdefault(job_id, {"plan": plan, "sandbox_id": None, "returncode": None})
+        return plan
+
+    async def prepare(self, job_id, output, **config):
+        raise AssertionError("Driver runner check must not prepare adapter serving")
+
+    async def start(self, job_id, api_key):
+        with self.controller.ledger.transaction() as connection:
+            job = dict(self.controller._job(connection, job_id))
+        launch = self.launches[job_id]
+        if job["state"] == "reserved":
+            self.controller.begin_dispatch(job_id)
+            launch["sandbox_id"] = "sb-" + job_id.replace("_", "-")
+            self.controller.provider_started(job_id, launch["sandbox_id"])
+        deployment = {"app_id": "ap-serving", "sandbox_id": launch["sandbox_id"],
+                      "image_id": "im-serving", "endpoint_sha256": digest(b"https://managed.example/v1")}
+        identity = {**launch["plan"]["policy"], "deployment": deployment}
+        root = self.output / job_id
+        root.mkdir(exist_ok=True)
+        (root / "policy.json").write_bytes(canonical(identity))
+        if job["state"] != "cleanup_pending":
+            result = {"status": "complete", "candidate_id": job["candidate"],
+                      "adapter_manifest_sha256": None, "policy_sha256": digest(canonical(launch["plan"]["policy"])),
+                      "deployment": deployment}
+            self.controller.record_result(job_id, result, digest(canonical(result)))
+        return {"endpoint": "https://managed.example/v1", "policy_identity": identity,
+                "candidate": None, "policy_path": str(root / "policy.json"), "base_policy_path": None}
+
+    def stored(self, job_id):
+        with self.controller.ledger.transaction() as connection:
+            job = dict(self.controller._job(connection, job_id))
+        launch = self.launches[job_id]
+        return job, {"sandbox_id": launch["sandbox_id"]}, launch["plan"]
+
+    async def inspect(self, sandbox_id):
+        launch = next(value for value in self.launches.values() if value["sandbox_id"] == sandbox_id)
+        return {"id": sandbox_id, "tags": launch["plan"]["tags"],
+                "returncode": launch["returncode"], "endpoint": "https://managed.example/v1"}
+
+    def acknowledge(self, job_id, observed):
+        return observed["id"]
+
+    async def terminate(self, job_id):
+        launch = self.launches[job_id]
+        launch["returncode"] = -15
+        with self.controller.ledger.transaction() as connection:
+            state = self.controller._job(connection, job_id)["state"]
+        if state == "cleanup_pending":
+            self.controller.provider_cleanup_confirmed(job_id, "serving-release:" + job_id)
+        return {"sandbox_id": launch["sandbox_id"], "returncode": -15}
+
+
 class RunnerTests(unittest.TestCase):
     def setUp(self):
         self.fixture = coordinator_fixtures.CoordinatorTests()
@@ -109,10 +178,11 @@ class RunnerTests(unittest.TestCase):
         self.coordinator.attach_driver_patch("driver-action", self.patch)
         self.lifecycle = FleetLifecycle(self.coordinator.controller)
         self.fleet = FleetExecutor(self.coordinator, self.lifecycle)
+        self.serving = ServingLifecycle(self.coordinator)
         self.runner = GameWorldProviderRunner(
             self.coordinator, MODAL,
-            {"QWEN_BASE_URL": "https://baseline.example/v1", "QWEN_API_KEY": "x" * 32},
-            fleet_lifecycle=self.lifecycle, fleet_executor=self.fleet)
+            {"QWEN_API_KEY": "x" * 32}, fleet_lifecycle=self.lifecycle,
+            fleet_executor=self.fleet, serving_lifecycle=self.serving)
         recovery = self.coordinator.supervisor.recovery_actions()[0]
         self.assertEqual(recovery["action"], "resume-coordinator-workflow")
         self.assertEqual(recovery["deadline"], self.coordinator.supervisor.snapshot()["supervisor"]["deadline"])
@@ -124,9 +194,13 @@ class RunnerTests(unittest.TestCase):
         first = self.run_async(self.runner.run_once(2))
         self.assertEqual(first["dispatch"][0]["kind"], "driver_build")
         self.assertEqual(self.fleet.driver_attempts, 1)
-        self.assertEqual(self.coordinator.workflow(self.proposal["id"])["state"], "evaluating")
+        self.assertEqual(self.coordinator.workflow(self.proposal["id"])["state"],
+                         "starting_baseline_serving")
         second = self.run_async(self.runner.run_once(2))
-        self.assertEqual(len(second["dispatch"]), 2)
+        self.assertEqual(second["dispatch"][0]["kind"], "serving")
+        self.assertEqual(self.coordinator.workflow(self.proposal["id"])["state"], "evaluating")
+        third = self.run_async(self.runner.run_once(2))
+        self.assertEqual(len(third["dispatch"]), 2)
         self.assertEqual({row["candidate"] for row in self.fleet.evaluations},
                          {"baseline", "driver-input-candidate"})
         candidate = next(row for row in self.fleet.evaluations if row["candidate"] != "baseline")
@@ -134,7 +208,7 @@ class RunnerTests(unittest.TestCase):
         self.assertIsNotNone(candidate["driver"])
         self.assertIsNone(baseline["driver"])
         self.assertEqual({row["endpoint"] for row in self.fleet.evaluations},
-                         {"https://baseline.example/v1"})
+                         {"https://managed.example/v1"})
 
     def test_runner_resumes_dispatching_build_without_second_admission(self):
         admitted = self.coordinator.admit_ready(1)[0]["job_id"]
@@ -144,6 +218,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(result["dispatch"][0]["outcome"], "complete")
         self.assertEqual(self.fleet.driver_attempts, 1)
         self.assertEqual(self.lifecycle.releases, 1)
+        self.run_async(self.runner.run_once(1))
         self.assertEqual(self.coordinator.workflow(self.proposal["id"])["state"], "evaluating")
 
     def test_runner_materializes_patch_before_same_cycle_dispatch(self):
@@ -167,10 +242,11 @@ class RunnerTests(unittest.TestCase):
 
         lifecycle = FleetLifecycle(coordinator.controller)
         fleet = FleetExecutor(coordinator, lifecycle)
+        serving = ServingLifecycle(coordinator)
         runner = GameWorldProviderRunner(
             coordinator, MODAL,
-            {"QWEN_BASE_URL": "https://baseline.example/v1", "QWEN_API_KEY": "x" * 32},
-            fleet_lifecycle=lifecycle, fleet_executor=fleet, research_worker=Research())
+            {"QWEN_API_KEY": "x" * 32}, fleet_lifecycle=lifecycle, fleet_executor=fleet,
+            serving_lifecycle=serving, research_worker=Research())
         result = self.run_async(runner.run_once(1))
         self.assertEqual(result["research"][0]["outcome"], "attached")
         self.assertEqual(result["dispatch"][0]["kind"], "driver_build")
@@ -203,17 +279,20 @@ class RunnerTests(unittest.TestCase):
             "runner-confirmation-action", "runner-confirmation-lease", 43)
         lifecycle = FleetLifecycle(coordinator.controller)
         fleet = FleetExecutor(coordinator, lifecycle)
+        serving = ServingLifecycle(coordinator)
         runner = GameWorldProviderRunner(
             coordinator, MODAL,
-            {"QWEN_BASE_URL": "https://baseline.example/v1", "QWEN_API_KEY": "x" * 32},
-            fleet_lifecycle=lifecycle, fleet_executor=fleet)
+            {"QWEN_API_KEY": "x" * 32}, fleet_lifecycle=lifecycle,
+            fleet_executor=fleet, serving_lifecycle=serving)
+        serving_result = self.run_async(runner.run_once(2))
+        self.assertEqual(serving_result["dispatch"][0]["kind"], "serving")
         result = self.run_async(runner.run_once(2))
         self.assertEqual(len(result["dispatch"]), 2)
         self.assertEqual({row["candidate"] for row in fleet.evaluations},
                          {"baseline", candidate["id"]})
         with coordinator.controller.ledger.transaction() as connection:
             leases = {json.loads(row["specification"]).get("private_lease")
-                      for row in connection.execute("SELECT specification FROM jobs")}
+                      for row in connection.execute("SELECT specification FROM jobs WHERE kind='evaluation'")}
         self.assertEqual(leases, {"runner-confirmation-lease"})
 
     def test_research_stop_rechecks_gate_before_admission(self):
@@ -224,8 +303,8 @@ class RunnerTests(unittest.TestCase):
 
         runner = GameWorldProviderRunner(
             self.coordinator, MODAL,
-            {"QWEN_BASE_URL": "https://baseline.example/v1", "QWEN_API_KEY": "x" * 32},
-            fleet_lifecycle=self.lifecycle, fleet_executor=self.fleet, research_worker=Research())
+            {"QWEN_API_KEY": "x" * 32}, fleet_lifecycle=self.lifecycle, fleet_executor=self.fleet,
+            serving_lifecycle=self.serving, research_worker=Research())
         result = self.run_async(runner.run_once(1))
         self.assertEqual(result["admitted"], [])
         self.assertEqual(result["dispatch"], [])
@@ -239,9 +318,9 @@ class RunnerTests(unittest.TestCase):
 
         runner = GameWorldProviderRunner(
             self.coordinator, MODAL,
-            {"QWEN_BASE_URL": "https://baseline.example/v1", "QWEN_API_KEY": "x" * 32},
+            {"QWEN_API_KEY": "x" * 32},
             fleet_lifecycle=self.lifecycle, fleet_executor=self.fleet,
-            billing_reconciler=Billing())
+            serving_lifecycle=self.serving, billing_reconciler=Billing())
         result = self.run_async(runner.run_once(1))
         self.assertEqual(result["billing"], {"outcome": "failed"})
         self.assertEqual(result["admitted"], [])
@@ -264,6 +343,7 @@ class RunnerTests(unittest.TestCase):
 
         telemetry = Telemetry()
         self.coordinator.supervisor.telemetry = telemetry
+        self.run_async(self.runner.run_once(2))
         self.run_async(self.runner.run_once(2))
         self.run_async(self.runner.run_once(2))
         workflow = self.coordinator.workflow(self.proposal["id"])

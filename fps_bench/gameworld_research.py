@@ -127,6 +127,9 @@ def load_policy(path=DEFAULT_POLICY, catalog_path=DEFAULT_CATALOG):
         "litellm_tokens": LIMITS["litellm_tokens"][0],
         "desktop_concurrency": 2,
         "training_concurrency": 1,
+        "baseline_serving_micro_usd": 10_000_000,
+        "minimum_serving_micro_usd": 10_000_000,
+        "serving_seconds": 3600,
         "campaign_seconds": 21600,
     }
     if limits != expected_limits:
@@ -343,7 +346,7 @@ def validate_proposal(proposal, policy, context, baseline):
             raise ValueError("Unexpected model experiment schema")
         if (experiment["objective"] not in policy["model"]["objectives"]
                 or budget["modal_training_micro_usd"] <= 0
-                or budget["modal_serving_micro_usd"] <= 0
+                or budget["modal_serving_micro_usd"] < policy["limits"]["minimum_serving_micro_usd"]
                 or budget["modal_micro_usd"] != (
                     budget["modal_training_micro_usd"] + budget["modal_serving_micro_usd"])):
             raise ValueError("Model objective requires a bounded Modal reservation")

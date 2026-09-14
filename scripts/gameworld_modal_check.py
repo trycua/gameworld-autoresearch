@@ -68,6 +68,9 @@ class GameWorldModalTests(unittest.TestCase):
                          "generation": {"temperature": 0.8, "top_p": 0.95, "max_tokens": 128,
                                         "response_format": "unconstrained-json-text"}}
         contract = copy.deepcopy(source.contract)
+        contract["episode_template"].update(
+            model=self.identity["base_model"], revision=self.identity["base_revision"],
+            served_model=self.identity["served_model"])
         train_id = context["splits"]["train"][0]
         train = {**context["assignments"][train_id], "seed": 42}
         contract["public_splits"]["train"]["tasks"] = [train]
@@ -79,6 +82,9 @@ class GameWorldModalTests(unittest.TestCase):
         baseline = copy.deepcopy(source.baseline)
         baseline["contract_hash"] = self.contract_hash
         baseline["policy_sha256"] = policy_digest(self.identity)
+        baseline["model"].update(
+            base_model=self.identity["base_model"], base_revision=self.identity["base_revision"],
+            processor_revision=self.identity["base_revision"], served_model=self.identity["served_model"])
         self.controller.register_candidate(baseline)
         self.dataset = self.home / "dataset"
         (self.dataset / "images").mkdir(parents=True)

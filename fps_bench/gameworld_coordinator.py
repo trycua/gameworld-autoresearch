@@ -21,7 +21,8 @@ from fps_bench.gameworld_training import GameWorldTrainingRegistry
 
 QUEUE_STATES = {"pending", "admitted", "live", "complete", "failed"}
 WORKFLOW_STATES = {
-    "awaiting_patch", "building", "collecting_rollouts", "awaiting_dataset", "awaiting_sft_dataset",
+    "awaiting_patch", "building", "starting_baseline_serving", "collecting_rollouts",
+    "awaiting_baseline_serving_stop", "awaiting_dataset", "awaiting_sft_dataset",
     "training", "serving", "evaluating", "qualified_serving_live",
     "confirming", "sealed_evaluating", "awaiting_serving_stop", "complete", "rejected",
 }
@@ -184,7 +185,8 @@ class GameWorldCoordinator:
                 "serving_micro_usd": proposal["budget"]["modal_serving_micro_usd"],
             }
         state = "awaiting_patch" if proposal["track"] == "driver" else (
-            "collecting_rollouts" if proposal["experiment"]["objective"] == "grpo" else "awaiting_sft_dataset")
+            "starting_baseline_serving" if proposal["experiment"]["objective"] == "grpo"
+            else "awaiting_sft_dataset")
         with self.controller.ledger.transaction() as connection:
             existing = connection.execute(
                 "SELECT * FROM gameworld_workflows WHERE proposal_id=?", (proposal["id"],)
@@ -202,7 +204,7 @@ class GameWorldCoordinator:
                 "proposal": proposal["id"], "action": action_id, "track": proposal["track"],
             })
         if proposal["track"] == "model" and proposal["experiment"]["objective"] == "grpo":
-            self._queue_rollouts(proposal)
+            self._queue_baseline_serving(proposal["id"], "rollout")
         return {**action, "workflow": proposal["id"], "workflow_state": state}
 
     @staticmethod
@@ -252,6 +254,40 @@ class GameWorldCoordinator:
     def _candidate(self, candidate_id):
         with self.controller.ledger.transaction() as connection:
             return json.loads(self.controller._candidate(connection, candidate_id)["manifest"])
+
+    def _queue_baseline_serving(self, workflow, purpose):
+        if purpose not in {"development", "rollout", "confirmation", "sealed"}:
+            raise ValueError("Unsupported baseline serving purpose")
+        phase = "baseline-serving-" + purpose
+        baseline = self._candidate("baseline")
+        current = self.workflow(workflow)
+        owner = current["candidate_id"] or self.controller.snapshot()["controller"]["champion"]
+        candidate = self._candidate(owner)
+        identity = json.loads((self.state_root / "inputs/baseline-policy.json").read_bytes())
+        if (candidate["model"]["adapter_sha256"] is not None
+                or candidate["policy_sha256"] != baseline["policy_sha256"]
+                or policy_digest(identity) != candidate["policy_sha256"]):
+            raise LedgerConflict("Baseline policy bytes differ from the registered candidate")
+        assignment = {"mode": "baseline", "policy_sha256": candidate["policy_sha256"],
+                      "served_model": candidate["model"]["served_model"],
+                      "generation": identity["generation"]}
+        self._queue(workflow, phase, [{
+            "candidate": owner, "kind": "serving", "assignment": assignment,
+            "reservations": {"modal_micro_usd": self.policy["limits"]["baseline_serving_micro_usd"]},
+            "timeout_seconds": self.policy["limits"]["serving_seconds"],
+        }])
+        current = self.workflow(workflow)
+        job_id = self._job_id(workflow, phase, 0)
+        self._set_workflow(workflow, details={**current["details"],
+                                             "baseline_serving_job": job_id,
+                                             "baseline_serving_phase": phase})
+        return job_id
+
+    def _request_baseline_stop(self, workflow, after):
+        if "baseline_serving_job" not in workflow["details"]:
+            raise LedgerConflict("Workflow lost its baseline serving owner")
+        details = {**workflow["details"], "after_baseline_serving": after}
+        self._set_workflow(workflow["proposal_id"], state="awaiting_baseline_serving_stop", details=details)
 
     def _queue_rollouts(self, proposal):
         parent = self._candidate(self.controller.snapshot()["controller"]["champion"])
@@ -346,6 +382,15 @@ class GameWorldCoordinator:
         } for run in lease["schedule"]]
         self._queue(workflow, lease["split"], rows)
 
+    def _private_lease(self, lease_id):
+        with self.controller.ledger.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM private_split_leases WHERE id=?", (lease_id,)
+            ).fetchone()
+            if row is None:
+                raise LedgerConflict("Workflow lost its protected split lease")
+            return self.controller._lease_result(row, include_schedule=True)
+
     def start_confirmation(self, action_id, lease_id, randomization_seed, duration_seconds=18000):
         workflow = self.workflow(action_id)
         expected = "nominate_joint" if workflow["track"] == "joint" else "nominate"
@@ -354,18 +399,26 @@ class GameWorldCoordinator:
                 or workflow["state"] != allowed_state or not workflow["decision"]
                 or workflow["decision"].get("decision") != expected or not workflow["candidate_id"]):
             raise LedgerConflict("Confirmation requires a qualified candidate and any live model serving")
-        lease = self.controller.issue_private_split_lease(
-            lease_id, workflow["candidate_id"], "confirmation", randomization_seed, duration_seconds)
-        timeout = min(1800, max(1, lease["expires"] - lease["issued"]))
-        self._queue_private_evaluations(workflow["proposal_id"], lease, timeout)
-        details = {**workflow["details"], "confirmation_lease": lease["id"],
-                   "confirmation_schedule_sha256": lease["schedule_hash"]}
-        self._set_workflow(workflow["proposal_id"], state="confirming", details=details)
+        if workflow["track"] == "driver":
+            details = {**workflow["details"], "baseline_continuation": "confirmation",
+                       "private_request": {"lease_id": lease_id, "randomization_seed": randomization_seed,
+                                           "duration_seconds": duration_seconds}}
+            self._set_workflow(workflow["proposal_id"], state="starting_baseline_serving", details=details)
+            self._queue_baseline_serving(workflow["proposal_id"], "confirmation")
+        else:
+            lease = self.controller.issue_private_split_lease(
+                lease_id, workflow["candidate_id"], "confirmation", randomization_seed, duration_seconds)
+            timeout = min(1800, max(1, lease["expires"] - lease["issued"]))
+            details = {**workflow["details"], "confirmation_lease": lease["id"],
+                       "confirmation_schedule_sha256": lease["schedule_hash"]}
+            self._queue_private_evaluations(workflow["proposal_id"], lease, timeout)
+            self._set_workflow(workflow["proposal_id"], state="confirming", details=details)
         return self.workflow(workflow["proposal_id"])
 
     def start_sealed(self, lease_id, randomization_seed, duration_seconds=18000):
         champion = self.controller.snapshot()["controller"]["champion"]
         candidate = self._candidate(champion)
+        needs_baseline = candidate["model"]["adapter_sha256"] is None
         serving_owner = None
         if candidate["change_class"] in ("model", "joint"):
             model_candidate = (candidate["components"]["model"] if candidate["change_class"] == "joint"
@@ -378,10 +431,14 @@ class GameWorldCoordinator:
             if row is None or self.workflow(row["proposal_id"])["state"] != "qualified_serving_live":
                 raise BudgetRefused("Sealed model evaluation requires its attested endpoint to remain live")
             serving_owner = row["proposal_id"]
-        lease = self.controller.issue_private_split_lease(
-            lease_id, champion, "sealed", randomization_seed, duration_seconds)
         workflow_id = "sealed-" + digest(canonical(lease_id))[:24]
-        details = {"sealed_lease": lease["id"], "sealed_schedule_sha256": lease["schedule_hash"]}
+        request = {"lease_id": lease_id, "randomization_seed": randomization_seed,
+                   "duration_seconds": duration_seconds}
+        lease = None if needs_baseline else self.controller.issue_private_split_lease(
+            lease_id, champion, "sealed", randomization_seed, duration_seconds)
+        details = ({"baseline_continuation": "sealed", "private_request": request}
+                   if needs_baseline else {
+                       "sealed_lease": lease["id"], "sealed_schedule_sha256": lease["schedule_hash"]})
         if serving_owner is not None:
             details["serving_owner"] = serving_owner
         if candidate["change_class"] == "joint":
@@ -398,19 +455,26 @@ class GameWorldCoordinator:
             ).fetchone()
             if existing:
                 current = self._workflow(connection, workflow_id)
-                if current["candidate_id"] != champion or current["details"] != details:
+                request_changed = (needs_baseline
+                                   and current["details"].get("private_request") != request)
+                if (current["candidate_id"] != champion or request_changed
+                        or not needs_baseline and current["details"] != details):
                     raise LedgerConflict("Sealed workflow identity changed")
             else:
+                initial_state = "starting_baseline_serving" if needs_baseline else "sealed_evaluating"
                 connection.execute(
                     "INSERT INTO gameworld_workflows VALUES (?,?,?,?,?,?,?,NULL)",
-                    (workflow_id, workflow_id, "sealed", lease["comparison"], "sealed_evaluating",
+                    (workflow_id, workflow_id, "sealed", lease_id if needs_baseline else lease["comparison"], initial_state,
                      champion, canonical(details).decode()),
                 )
                 self.controller.ledger._event(connection, "gameworld_sealed_workflow_started", {
-                    "workflow": workflow_id, "candidate": champion, "lease": lease["id"],
+                    "workflow": workflow_id, "candidate": champion, "lease": lease_id,
                 })
-        timeout = min(1800, max(1, lease["expires"] - lease["issued"]))
-        self._queue_private_evaluations(workflow_id, lease, timeout)
+        if needs_baseline:
+            self._queue_baseline_serving(workflow_id, "sealed")
+        else:
+            timeout = min(1800, max(1, lease["expires"] - lease["issued"]))
+            self._queue_private_evaluations(workflow_id, lease, timeout)
         return self.workflow(workflow_id)
 
     def promote(self, action_id, receipt):
@@ -632,7 +696,47 @@ class GameWorldCoordinator:
         transitions = []
         for workflow in workflows:
             proposal_id, state = workflow["proposal_id"], workflow["state"]
-            if state == "building":
+            if state == "starting_baseline_serving":
+                items = self._items(proposal_id, workflow["details"]["baseline_serving_phase"])
+                if items and items[0]["state"] == "failed":
+                    continuation = workflow["details"].get("baseline_continuation")
+                    decision = {"phase": "baseline-serving", "failed": True}
+                    if continuation in ("confirmation", "sealed"):
+                        lease_id = workflow["details"].get(continuation + "_lease")
+                        if lease_id is not None:
+                            self.controller.abandon_private_split_lease(lease_id, "baseline serving failed")
+                        self._set_workflow(proposal_id, state="rejected", decision=decision)
+                    else:
+                        self._finalize(workflow, workflow["candidate_id"] or proposal_id, False, decision)
+                    transitions.append({"workflow": proposal_id, "state": "rejected"})
+                elif items and items[0]["state"] == "live":
+                    continuation = workflow["details"].get("baseline_continuation")
+                    if continuation in ("confirmation", "sealed"):
+                        request = workflow["details"].get("private_request")
+                        if not isinstance(request, dict):
+                            raise LedgerConflict("Baseline serving continuation lost its private lease request")
+                        lease = self.controller.issue_private_split_lease(
+                            request["lease_id"], workflow["candidate_id"], continuation,
+                            request["randomization_seed"], request["duration_seconds"])
+                        timeout = min(1800, max(1, lease["expires"] - int(time.time())))
+                        self._queue_private_evaluations(proposal_id, lease, timeout)
+                        next_state = "confirming" if continuation == "confirmation" else "sealed_evaluating"
+                        details = {**workflow["details"], continuation + "_lease": lease["id"],
+                                   continuation + "_schedule_sha256": lease["schedule_hash"]}
+                        self._set_workflow(proposal_id, state=next_state, details=details)
+                    elif workflow["track"] == "driver":
+                        self._queue_evaluations(
+                            proposal_id, ["baseline", workflow["candidate_id"]], workflow["comparison"])
+                        self._set_workflow(proposal_id, state="evaluating")
+                        next_state = "evaluating"
+                    else:
+                        with self.controller.ledger.transaction() as connection:
+                            proposal = self._proposal(connection, proposal_id)
+                        self._queue_rollouts(proposal)
+                        self._set_workflow(proposal_id, state="collecting_rollouts")
+                        next_state = "collecting_rollouts"
+                    transitions.append({"workflow": proposal_id, "state": next_state})
+            elif state == "building":
                 items = self._items(proposal_id, "driver-build")
                 if items and items[0]["state"] in ("complete", "failed"):
                     envelope = self._result(items[0]["job_id"])
@@ -643,17 +747,20 @@ class GameWorldCoordinator:
                         continue
                     candidate_id = result["candidate_id"]
                     self._candidate(candidate_id)
-                    self._queue_evaluations(proposal_id, ["baseline", candidate_id], workflow["comparison"])
-                    self._set_workflow(proposal_id, state="evaluating", candidate_id=candidate_id)
-                    transitions.append({"workflow": proposal_id, "state": "evaluating"})
+                    self._set_workflow(proposal_id, state="starting_baseline_serving", candidate_id=candidate_id)
+                    self._queue_baseline_serving(proposal_id, "development")
+                    transitions.append({"workflow": proposal_id, "state": "starting_baseline_serving"})
             elif state == "collecting_rollouts":
                 items = self._items(proposal_id, "rollout")
                 if any(item["state"] == "failed" for item in items):
-                    self._finalize(workflow, proposal_id, False, {"phase": "rollout", "failed": True})
-                    transitions.append({"workflow": proposal_id, "state": "rejected"})
+                    decision = {"phase": "rollout", "failed": True}
+                    self._request_baseline_stop(workflow, {
+                        "state": "rejected", "candidate_id": proposal_id, "qualified": False,
+                        "decision": decision})
+                    transitions.append({"workflow": proposal_id, "state": "awaiting_baseline_serving_stop"})
                 elif items and all(item["state"] == "complete" for item in items):
-                    self._set_workflow(proposal_id, state="awaiting_dataset")
-                    transitions.append({"workflow": proposal_id, "state": "awaiting_dataset"})
+                    self._request_baseline_stop(workflow, {"state": "awaiting_dataset"})
+                    transitions.append({"workflow": proposal_id, "state": "awaiting_baseline_serving_stop"})
             elif state == "training":
                 items = self._items(proposal_id, "training")
                 if items and items[0]["state"] in ("complete", "failed"):
@@ -675,9 +782,9 @@ class GameWorldCoordinator:
                         "comparison": workflow["comparison"], "generation": baseline_policy["generation"],
                     }
                     self._queue(proposal_id, "serving", [{
-                        "candidate": "baseline", "kind": "serving", "assignment": assignment,
+                        "candidate": items[0]["candidate"], "kind": "serving", "assignment": assignment,
                         "reservations": {"modal_micro_usd": allocation["serving_micro_usd"]},
-                        "timeout_seconds": proposal["budget"]["timeout_seconds"],
+                        "timeout_seconds": self.policy["limits"]["serving_seconds"],
                     }])
                     self._set_workflow(proposal_id, state="serving", candidate_id=candidate_id)
                     transitions.append({"workflow": proposal_id, "state": "serving"})
@@ -714,22 +821,41 @@ class GameWorldCoordinator:
                         decision = self.controller.decide_development(workflow["candidate_id"])
                         self.emit_evaluation(workflow, workflow["candidate_id"], decision, "paired")
                         if workflow["track"] == "driver":
-                            self._finalize(workflow, workflow["candidate_id"],
-                                           decision["decision"] == "nominate", decision)
+                            qualified = decision["decision"] == "nominate"
+                            self._request_baseline_stop(workflow, {
+                                "state": "complete" if qualified else "rejected",
+                                "candidate_id": workflow["candidate_id"], "qualified": qualified,
+                                "decision": decision})
                         elif decision["decision"] == "nominate":
                             self._set_workflow(proposal_id, state="qualified_serving_live", decision=decision)
                         else:
                             self._set_workflow(proposal_id, state="awaiting_serving_stop", decision=decision)
                     transitions.append({"workflow": proposal_id, "state": self.workflow(proposal_id)["state"]})
+            elif state == "awaiting_baseline_serving_stop":
+                serving = self._items(proposal_id, workflow["details"]["baseline_serving_phase"])
+                if serving and serving[0]["state"] == "complete":
+                    after = workflow["details"].get("after_baseline_serving")
+                    if not isinstance(after, dict) or "state" not in after:
+                        raise LedgerConflict("Baseline serving stop lost its continuation")
+                    if after["state"] == "awaiting_dataset":
+                        self._set_workflow(proposal_id, state="awaiting_dataset")
+                    elif after.get("finalize", True):
+                        self._finalize(workflow, after["candidate_id"], after["qualified"], after["decision"])
+                    else:
+                        self._set_workflow(proposal_id, state=after["state"],
+                                           candidate_id=after["candidate_id"], decision=after["decision"])
+                    transitions.append({"workflow": proposal_id, "state": after["state"]})
             elif state == "confirming":
                 items = self._items(proposal_id, "confirmation")
                 if items and all(item["state"] == "complete" for item in items):
                     decision = self.controller.decide_confirmation(workflow["details"]["confirmation_lease"])
                     self.emit_evaluation(workflow, workflow["candidate_id"], decision, "confirmation")
                     if workflow["track"] == "driver":
-                        self._set_workflow(
-                            proposal_id, state="complete" if decision["decision"] == "confirmation_pass" else "rejected",
-                            decision=decision)
+                        qualified = decision["decision"] == "confirmation_pass"
+                        self._request_baseline_stop(workflow, {
+                            "state": "complete" if qualified else "rejected",
+                            "candidate_id": workflow["candidate_id"], "qualified": qualified,
+                            "decision": decision, "finalize": False})
                     else:
                         if decision["decision"] == "confirmation_pass":
                             self._set_workflow(proposal_id, state="qualified_serving_live", decision=decision)
@@ -746,16 +872,23 @@ class GameWorldCoordinator:
                 if items and all(item["state"] == "complete" for item in items):
                     report = self.controller.complete_sealed_evaluation(workflow["details"]["sealed_lease"])
                     self.emit_evaluation(workflow, workflow["candidate_id"], report, "sealed")
-                    self._set_workflow(proposal_id, state="complete", decision=report)
-                    serving_owner = workflow["details"].get("serving_owner")
-                    if serving_owner is not None:
-                        owner = self.workflow(serving_owner)
-                        self._set_workflow(serving_owner, state="awaiting_serving_stop", decision=owner["decision"])
-                    joint_workflow = workflow["details"].get("joint_workflow")
-                    if joint_workflow is not None:
-                        joint = self.workflow(joint_workflow)
-                        self._set_workflow(joint_workflow, state="awaiting_serving_stop", decision=joint["decision"])
-                    transitions.append({"workflow": proposal_id, "state": "complete"})
+                    if "baseline_serving_job" in workflow["details"]:
+                        self._request_baseline_stop(workflow, {
+                            "state": "complete", "candidate_id": workflow["candidate_id"],
+                            "qualified": True, "decision": report, "finalize": False})
+                        transitions.append({"workflow": proposal_id,
+                                            "state": "awaiting_baseline_serving_stop"})
+                    else:
+                        self._set_workflow(proposal_id, state="complete", decision=report)
+                        serving_owner = workflow["details"].get("serving_owner")
+                        if serving_owner is not None:
+                            owner = self.workflow(serving_owner)
+                            self._set_workflow(serving_owner, state="awaiting_serving_stop", decision=owner["decision"])
+                        joint_workflow = workflow["details"].get("joint_workflow")
+                        if joint_workflow is not None:
+                            joint = self.workflow(joint_workflow)
+                            self._set_workflow(joint_workflow, state="awaiting_serving_stop", decision=joint["decision"])
+                        transitions.append({"workflow": proposal_id, "state": "complete"})
             elif state == "awaiting_serving_stop":
                 if workflow["track"] == "joint":
                     owner = workflow["details"]["serving_owner"]
@@ -878,6 +1011,10 @@ class GameWorldCoordinator:
             elif workflow["state"] == "awaiting_serving_stop":
                 owner = workflow["details"].get("serving_owner", workflow["proposal_id"])
                 actions.append({"workflow": workflow["proposal_id"], "action": "terminate-serving", "owner": owner})
+            elif workflow["state"] == "awaiting_baseline_serving_stop":
+                actions.append({"workflow": workflow["proposal_id"], "action": "terminate-serving",
+                                "owner": workflow["proposal_id"],
+                                "job_id": workflow["details"]["baseline_serving_job"]})
         actions.extend({"workflow": row["workflow"], "job_id": row["job_id"],
                         "action": ("dispatch-" if row["state"] == "reserved" else "resume-") + row["kind"]}
                        for row in self.runnable())
