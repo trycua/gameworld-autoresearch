@@ -26,6 +26,16 @@ Keep polling the same group for upward revisions. Resource/app coverage, late
 non-compute charges, current serving/training bounds and credential containment
 still require the campaign admission audit.
 
+`fps_bench.gameworld_billing.GameWorldModalReconciler` derives a closed-hour plan
+directly from `billing_pending` training and serving jobs, their immutable launch
+plans, termination receipts and reservation events. It refuses to close an hour
+while another held Modal reservation overlaps that window. After authenticated
+provider observation, it calls the same no-refund reconciler and atomically moves
+each matching controller job to `cleaned` only after its reservation is proven to
+belong to the retained group. It waits while any Modal job is active and applies
+bounded exponential backoff to provider errors. A crash after ledger
+reconciliation is recovered without a second provider allocation or refund.
+
 ## Trusted CLI
 
 `scripts/modal_reconcile_completed.py` obtains billing directly through authenticated
@@ -33,6 +43,9 @@ still require the campaign admission audit.
 identity and the durable import record, then writes evidence before the atomic
 ledger transaction. It requires the existing canonical GameWorld ledger; it does
 not initialize a replacement. Plans belong to the trusted controller, not workers.
+The GameWorld runner performs the equivalent flow automatically for its own
+training/serving jobs once their billing hours are complete; the manual CLI remains
+for historical probes, image imports and explicit revision polling.
 
 ```bash
 PYTHONPATH=. python scripts/modal_reconcile_completed.py \
@@ -65,3 +78,7 @@ micro-dollar accounting values, rounded upward per provider row.
 See `docs/results/2026-09-14-modal-reconciliation.md`. All six completed probe/
 baseline/import holds were closed without refunds, while the total commitment
 remained $106.013141. No GPU work was dispatched by reconciliation.
+
+Offline coverage: `scripts/gameworld_billing_check.py` verifies automatic plan
+derivation, overlap waiting, retained job closure, crash recovery and the
+three-failure stop gate.

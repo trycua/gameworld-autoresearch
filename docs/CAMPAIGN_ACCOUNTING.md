@@ -3,9 +3,11 @@
 ## Status
 
 The controller-side ledger is implemented and tested. **Campaign enforcement is
-not complete:** Pi now routes through a local admission relay, but Modal adapters do not yet
-require admission across all paths. Completed-work conservative app-hour reconciliation is now implemented; production-loop reconciliation and a remote admission service remain incomplete. Do not launch an
-unattended campaign on the strength of this module alone. Linear: CUA-1167.
+not complete:** Pi routes through a local admission relay, and the GameWorld Modal
+runner admits, cleans and conservatively reconciles training/serving resources.
+Other provider paths, upstream LiteLLM usage settlement, remote admission and live
+campaign evidence remain incomplete. Do not launch an unattended campaign on the
+strength of this module alone. Linear: CUA-1167.
 
 `fps_bench/campaign_ledger.py` uses stdlib SQLite with full synchronous commits,
 foreign keys, and immediate write transactions. The database belongs on durable
@@ -116,9 +118,9 @@ a fake upstream, including admission refusal before any upstream call. This is
 SDK compatibility evidence, not real LiteLLM billing validation.
 
 The controller now shares atomic admission/settlement transactions with this
-ledger; see `docs/CAMPAIGN_CONTROLLER.md`. This does not yet unify job-envelope
-research reservations with the relay's per-request holds or add provider billing
-reconciliation. Both remain launch blockers.
+ledger; see `docs/CAMPAIGN_CONTROLLER.md`. Research proposals declare bounds, while
+actual LiteLLM requests reserve independently through the relay. Authenticated
+upstream token settlement and retry attribution remain launch blockers.
 
 
 ## Historical Modal import (real provider evidence)

@@ -191,6 +191,23 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(result["dispatch"], [])
         self.assertEqual(self.fleet.driver_attempts, 0)
 
+    def test_billing_stop_rechecks_gate_before_admission(self):
+        class Billing:
+            async def run_once(inner_self):
+                self.coordinator.controller.stop("synthetic billing stop")
+                return {"outcome": "failed"}
+
+        runner = GameWorldProviderRunner(
+            self.coordinator, MODAL,
+            {"QWEN_BASE_URL": "https://baseline.example/v1", "QWEN_API_KEY": "x" * 32},
+            fleet_lifecycle=self.lifecycle, fleet_executor=self.fleet,
+            billing_reconciler=Billing())
+        result = self.run_async(runner.run_once(1))
+        self.assertEqual(result["billing"], {"outcome": "failed"})
+        self.assertEqual(result["admitted"], [])
+        self.assertEqual(result["dispatch"], [])
+        self.assertEqual(self.fleet.driver_attempts, 0)
+
     def test_runner_emits_budget_and_candidate_evaluation_metrics(self):
         class Telemetry:
             campaign = "test-gameworld"

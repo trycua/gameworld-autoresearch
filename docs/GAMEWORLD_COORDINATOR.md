@@ -70,6 +70,14 @@ the trusted runner; researchers receive only the source ID, task IDs and hashes.
 The authenticated SFT registry re-verifies the selected dataset before any Modal
 job is admitted.
 
+Every runner cycle also checks completed Modal training and serving jobs for a
+fully closed billing-hour window. It authenticates workspace billing, verifies no
+sandbox remains active in the dedicated apps, rechecks each sandbox's terminal
+status and immutable tags, retains the full reservation without a refund, and then
+closes the controller jobs. Overlapping active holds defer reconciliation rather
+than inventing per-job shares of an aggregate app-hour bill. Three consecutive
+billing failures stop the campaign.
+
 Use one bounded pass during supervised bring-up, then `run` only with the
 independent watchdog active:
 
@@ -95,13 +103,14 @@ Validation:
 PYTHONPATH=. .venv/bin/python scripts/gameworld_coordinator_check.py
 PYTHONPATH=. .venv/bin/python scripts/gameworld_runner_check.py
 PYTHONPATH=. .venv/bin/python scripts/gameworld_research_worker_check.py
+PYTHONPATH=. .venv/bin/python scripts/gameworld_billing_check.py
 node --test tools/pi/gameworld-proposal.test.mjs
 ```
 
 The offline checks cover driver/GRPO routing, the full 34-game paired and factorial
 queue sizes, comparison isolation, explicit model budget ownership, failed-rollout
 rejection, authenticated SFT training/serving, proposal/patch materialization,
-credential filtering and restart idempotency. They do not
+credential filtering, closed-hour billing recovery and restart idempotency. They do not
 constitute a live Fleet or Modal campaign. Remaining gates are current image/
-contract publication, production watchdog deployment, live billing reconciliation,
+contract publication, production watchdog deployment, live reconciliation evidence,
 private split leases, promotion/rollback and bounded real vertical slices.

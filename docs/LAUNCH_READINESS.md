@@ -8,7 +8,7 @@ Parent gate: CUA-1166. Repository plan:
 
 | Issue | Gate | Current evidence | Still required |
 | --- | --- | --- | --- |
-| CUA-1167 | Shared budgets | Atomic ledger; development relay; real historical Modal app-hour import and replay; usage metrics verified; real expired-hold admission refusal with unchanged ledger | Verified upstream bounds, remaining historical usage, live all-in billing reconciliation, production admission and trusted controller |
+| CUA-1167 | Shared budgets | Atomic ledger; metered research relay; historical Modal import; no-refund app-hour reconciliation; automatic training/serving plan derivation, retained job closure and crash recovery; usage metrics verified | Authenticated LiteLLM retry settlement, remaining storage/image coverage and live new-job reconciliation evidence |
 | CUA-1168 | Frozen evaluation | Frozen source/assets/seeds; paired calculations; all 960 baseline steps independently replayed; 2080 external read-only artifacts hash-verified | Separate-identity custody deployment and durable confirmation/sealed-use limits |
 | CUA-1169 | Fleet lifecycle | Pinned gVisor min0/max20; two-desktop frozen harness staging; isolated patch/rollout/evaluation runner; restart-safe active-job resume; watchdog release coverage; 4.87s warm rebuild evidence | Build the current image, deploy the runner/watchdog and execute live slices; post-release scale-to-zero check waived |
 | CUA-1170 | Telemetry | Actual pretrained GPU loss and full 16-episode benchmark aggregates verified in Prometheus/Loki; durable outboxes; external artifact custody; dashboard JSON | Production-loop integration and dashboard publication/rendered verification (write access denied) |

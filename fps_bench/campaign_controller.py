@@ -468,6 +468,49 @@ class CampaignController:
             self._controller(connection)
             self._settle_job_in_transaction(connection, self._job(connection, job_id), actuals, receipt)
 
+    def retain_reconciled_jobs(self, job_ids, group_id):
+        if (not isinstance(job_ids, list) or not job_ids
+                or job_ids != sorted(set(job_ids))
+                or not isinstance(group_id, str) or not group_id.startswith("modal-retained:")):
+            raise ValueError("Sorted jobs and a retained Modal group identity are required")
+        with self.ledger.transaction() as connection:
+            self._controller(connection)
+            group = connection.execute(
+                "SELECT 1 FROM modal_reconciliation_groups WHERE id=?", (group_id,)
+            ).fetchone()
+            if group is None:
+                raise LedgerConflict("Unknown retained Modal reconciliation group")
+            for job_id in job_ids:
+                job = self._job(connection, job_id)
+                receipt = f"{group_id}:{job_id}"
+                if job["state"] == "cleaned":
+                    if job["cleanup_receipt"] != receipt:
+                        raise LedgerConflict("Retained billing receipt is immutable")
+                    continue
+                if job["state"] != "billing_pending" or not job["provider_cleanup_receipt"]:
+                    raise LedgerConflict("Only provider-cleaned jobs can retain reconciled billing")
+                specification = json.loads(job["specification"])
+                if set(specification["reservations"]) != {"modal_micro_usd"}:
+                    raise LedgerConflict("Retained reconciliation is only for Modal-owned jobs")
+                reservation_id = f"job:{job_id}:modal_micro_usd"
+                reservation = connection.execute(
+                    "SELECT state,receipt FROM reservations WHERE id=?", (reservation_id,)
+                ).fetchone()
+                member = connection.execute(
+                    "SELECT group_id FROM modal_reconciliation_members WHERE reservation_id=?",
+                    (reservation_id,),
+                ).fetchone()
+                if (reservation is None or reservation["state"] != "reconciled_retained"
+                        or member is None or member["group_id"] != group_id
+                        or not reservation["receipt"].startswith(group_id + ":")):
+                    raise LedgerConflict("Job reservation is not retained by the requested group")
+                connection.execute(
+                    "UPDATE jobs SET state='cleaned',cleanup_receipt=? WHERE id=?", (receipt, job_id)
+                )
+                self.ledger._event(connection, "billing_reconciled_retained", {
+                    "id": job_id, "group_id": group_id, "refund_micro_usd": 0,
+                })
+
     def cleanup_confirmed(self, job_id, receipt, actuals):
         if not isinstance(receipt, str) or not receipt.strip():
             raise ValueError("Validated cleanup/provider receipt required")

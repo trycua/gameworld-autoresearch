@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 from fps_bench.campaign_ledger import LedgerConflict
 from fps_bench.evaluation_contract import canonical, digest
 from fps_bench.fleet_provider import FleetLifecycle
+from fps_bench.gameworld_billing import GameWorldModalReconciler
 from fps_bench.gameworld_coordinator import GameWorldCoordinator
 from fps_bench.gameworld_fleet import GameWorldFleetExecutor
 from fps_bench.gameworld_modal import GameWorldModalTrainingLifecycle, GameWorldTrainingArtifacts
@@ -26,7 +27,8 @@ MODAL_FIELDS = {
 class GameWorldProviderRunner:
     def __init__(self, coordinator, modal_config, qwen_environment, *, candidate_api_key=None,
                  fleet_lifecycle=None, fleet_executor=None, training_lifecycle=None,
-                 training_artifacts=None, serving_lifecycle=None, research_worker=None):
+                 training_artifacts=None, serving_lifecycle=None, research_worker=None,
+                 billing_reconciler=None):
         self.coordinator = coordinator
         self.controller = coordinator.controller
         if not isinstance(modal_config, dict) or set(modal_config) != MODAL_FIELDS:
@@ -53,6 +55,7 @@ class GameWorldProviderRunner:
         self.serving = serving_lifecycle or GameWorldServingLifecycle(
             self.controller, coordinator.state_root / "serving")
         self.research = research_worker
+        self.billing = billing_reconciler
 
     def _workflow(self, proposal_id):
         return self.coordinator.workflow(proposal_id)
@@ -309,6 +312,8 @@ class GameWorldProviderRunner:
         transitions.extend(self.coordinator.advance())
         cleanup = await self.terminate_due_serving()
         transitions.extend(self.coordinator.advance())
+        billing = None if self.billing is None else await self.billing.run_once()
+        transitions.extend(self.coordinator.advance())
         admission_blocked = admission_blocked or self.admission_blocked()
         admitted = [] if admission_blocked else self.coordinator.admit_ready(maximum)
         runnable = [] if admission_blocked else self.coordinator.runnable()[:maximum]
@@ -322,7 +327,7 @@ class GameWorldProviderRunner:
                 self.coordinator.supervisor.telemetry, f"runner-accounting-{event_count}")
             telemetry = self.coordinator.supervisor.telemetry.flush() if recorded else {"recorded": False}
         return {"transitions": transitions, "admitted": admitted, "dispatch": events, "cleanup": cleanup,
-                "research": research,
+                "research": research, "billing": billing,
                 "required_actions": self.coordinator.required_actions(), "telemetry": telemetry}
 
     async def run_until_idle(self, maximum=2, max_cycles=10000):
@@ -333,7 +338,7 @@ class GameWorldProviderRunner:
             result = await self.run_once(maximum)
             history.append(result)
             if (result["dispatch"] or result["cleanup"] or result["transitions"]
-                    or result["admitted"] or result["research"]):
+                    or result["admitted"] or result["research"] or result["billing"]):
                 continue
             controller = self.controller.snapshot()
             if controller["controller"]["stopped"] or controller["budget"]["campaign"]["frozen"]:
@@ -388,9 +393,11 @@ def main():
     research = (GameWorldResearchWorker(
         coordinator, args.state_root / "research", sft_source_catalog=args.sft_source_catalog)
                 if args.enable_research else None)
+    billing = GameWorldModalReconciler(coordinator.controller, args.state_root / "billing")
     runner = GameWorldProviderRunner(
         coordinator, modal_config(args), qwen,
-        candidate_api_key=os.environ.get("QWEN_CANDIDATE_API_KEY"), research_worker=research)
+        candidate_api_key=os.environ.get("QWEN_CANDIDATE_API_KEY"), research_worker=research,
+        billing_reconciler=billing)
     if args.operation == "once":
         result = asyncio.run(runner.run_once(args.maximum))
     else:
