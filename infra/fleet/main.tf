@@ -4,7 +4,7 @@ terraform {
   required_providers {
     fleets = {
       source  = "trycua/fleets"
-      version = "0.2.0"
+      version = "0.3.0"
     }
   }
 }
@@ -18,7 +18,6 @@ resource "fleets_pool" "gameworld_autoresearch" {
   cpu_cores            = 4
   memory               = "16384Mi"
   container_disk_image = "ghcr.io/trycua/gameworld-autoresearch@sha256:d626893f7bc3c42603557e8ae2d9fdf8ca6ce4c671c1c5958cdba2152674f7ed"
-  image_pull_secret    = ""
   runtime              = "gvisor"
   readiness_probe_json = jsonencode({ tcpSocket = { port = 8000 } })
 

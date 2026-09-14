@@ -26,11 +26,9 @@ terraform -chdir=infra/fleet apply \
   -state=/home/node/.local/state/gameworld-autoresearch/fleet-terraform/terraform.tfstate
 ```
 
-Do not apply this configuration with registry provider `0.2.0`: that release
-turns an explicit empty `image_pull_secret` back into `ecr-credentials`. Until a
-fixed provider is released, build `trycua/cloud` commit `4a4f9716b` or
-`trycua/terraform-provider-fleets` commit `e6b1b49` and use a Terraform
-`dev_overrides` entry for `registry.terraform.io/trycua/fleets`.
+Provider `0.3.0` intentionally leaves an omitted `image_pull_secret` unset, so
+the public GameWorld image is pulled anonymously without a Terraform
+`dev_overrides` configuration.
 
 Do not run `terraform destroy` as campaign cleanup. A campaign releases only
 its named claims. The stable pool remains Terraform-owned and may scale to zero
