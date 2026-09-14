@@ -13,7 +13,6 @@ on:
       - bench/**
       - tasks/**
       - configs/**
-      - infra/**
       - scripts/gameworld_baseline_check.py
       - scripts/gameworld_driver_contract.py
       - scripts/gameworld_driver_worker.py

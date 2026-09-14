@@ -89,4 +89,5 @@ class GameServerTests(unittest.TestCase):
                 self.assertFalse(server.thread.is_alive())
 
 
-unittest.main()
+if __name__ == "__main__":
+    unittest.main()
