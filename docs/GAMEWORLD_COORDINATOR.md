@@ -8,11 +8,11 @@ must not receive direct database access.
 The coordinator currently persists and validates these paths:
 
 - Driver proposal -> allowlisted patch -> Fleet build/contract job -> controller-owned
-  base-model serving -> immutable driver candidate -> 68 candidate plus 68 paired-baseline
+  source-policy serving -> immutable driver candidate -> 68 candidate plus 68 paired-parent
   development episodes -> serving termination and billing reconciliation.
-- GRPO proposal -> controller-owned base-model serving -> one grouped Fleet rollout per
+- GRPO proposal -> controller-owned source-policy serving -> one grouped Fleet rollout per
   selected train task -> serving termination -> authenticated combined dataset -> Modal
-  training -> immutable adapter serving -> the same 136 paired development episodes.
+  training -> immutable parent-plus-child adapter serving -> the same 136 paired development episodes.
 - Qualified driver plus live qualified model -> fresh comparison identity -> all
   272 cells of the 2x2 baseline/driver/model/joint development schedule.
 - Nominated isolated or joint candidate -> controller-issued private confirmation
@@ -26,11 +26,12 @@ The coordinator currently persists and validates these paths:
   serving and paired evaluation path as GRPO.
 
 Fleet build, rollout and evaluation jobs do not reserve Modal dollars. A distinct
-controller-admitted serving job owns each base-model or adapter GPU lifetime and
-later reconciles that allocation. Base serving has a fixed `$10` hold and one-hour
-maximum, stops before training, and restarts for protected driver evaluations.
-Adapter vLLM advertises both the frozen base name and candidate LoRA name so paired
-and factorial cells share one GPU. This avoids unaccounted inference and
+controller-admitted serving job owns each source-policy or candidate GPU lifetime
+and later reconciles that allocation. Source serving has a fixed `$10` hold and
+one-hour maximum, stops before training, and restarts for protected driver
+evaluations. Candidate vLLM advertises both the actual parent policy and child LoRA
+name on one GPU; when the parent is already adapted, both immutable LoRA artifacts
+are staged and the raw base model is not mislabeled as the champion. This avoids unaccounted inference and
 unreconcilable per-Fleet-job Modal reservations.
 
 The coordinator CLI is a durable, credential-free control-plane interface:
@@ -63,13 +64,15 @@ the coordinator CLI nor the provider runner exposes a production bypass.
 `fps_bench/gameworld_runner.py` is the separate credentialed execution process.
 It consumes stable job IDs, resumes `dispatching`, `running` and `cleanup_pending`
 work without blind resubmission, invokes Fleet build/rollout/evaluation adapters,
-performs Modal SFT/GRPO stage-run-export-cleanup, starts and stops budgeted baseline
+performs Modal SFT/GRPO stage-run-export-cleanup, starts and stops budgeted source
 serving around driver/rollout work, keeps candidate serving alive through isolated
 and factorial evaluation, and terminates it after the decision. Model proposals
 carry exact training and serving reservation splits, so no operator can choose a
 different allocation after proposal approval. `QWEN_API_KEY` authenticates all
 controller-created endpoints; optional `QWEN_CANDIDATE_API_KEY` uses a distinct key
-for them. No external baseline URL or secret is written to the ledger.
+for them. No external serving URL or secret is written to the ledger. Promoted
+model, driver-on-model and joint champions retain immutable policy and adapter
+custody, so later GRPO generations compare the true parent against the child.
 
 With `--enable-research`, the runner invokes the isolated Pi research profile when
 the campaign is idle. Browser-verified sources feed one schema-constrained
@@ -123,8 +126,9 @@ PYTHONPATH=. .venv/bin/python scripts/gameworld_billing_check.py
 node --test tools/pi/gameworld-proposal.test.mjs
 ```
 
-The offline checks cover driver/GRPO routing, the full 34-game paired and factorial
-queue sizes, comparison isolation, explicit model budget ownership, failed-rollout
+The offline checks cover driver/GRPO routing, adapted-parent source serving,
+dual-LoRA publication, the full 34-game paired and factorial queue sizes,
+comparison isolation, explicit model budget ownership, failed-rollout
 rejection, authenticated SFT training/serving, proposal/patch materialization,
 credential filtering, closed-hour billing recovery and restart idempotency. They do not
 constitute a live Fleet or Modal campaign. Protected-split tests cover all 34
