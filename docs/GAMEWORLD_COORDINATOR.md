@@ -51,6 +51,11 @@ returns `required_actions`, including exactly-once dispatchable job IDs. Reopeni
 the coordinator with the same campaign, contract, baseline policy and state root
 preserves queues and does not duplicate jobs.
 
+Production initialization also validates the GameWorld contract schema and compares
+every frozen controller-source hash with the current repository before opening any
+workflow. Synthetic tests disable that host-source comparison explicitly; neither
+the coordinator CLI nor the provider runner exposes a production bypass.
+
 `fps_bench/gameworld_runner.py` is the separate credentialed execution process.
 It consumes stable job IDs, resumes `dispatching`, `running` and `cleanup_pending`
 work without blind resubmission, invokes Fleet build/rollout/evaluation adapters,

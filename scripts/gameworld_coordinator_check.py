@@ -79,7 +79,7 @@ class CoordinatorTests(unittest.TestCase):
             self.root / "campaign.sqlite", self.contract_path, self.contract_hash,
             self.fixture.baseline, self.root / "coordinator", self.fixture.policy,
             self.fixture.catalog, pool="test-pool", registry=self.registry,
-            private_splits=self.private_path)
+            private_splits=self.private_path, verify_workspace=False)
         self.coordinator.initialize("test-gameworld", self.policy_path)
 
     def finish_job(self, job_id, result, cleanup=True):
@@ -116,10 +116,18 @@ class CoordinatorTests(unittest.TestCase):
             self.root / "campaign.sqlite", self.contract_path, self.contract_hash,
             self.fixture.baseline, self.root / "coordinator", self.fixture.policy,
             self.fixture.catalog, pool="test-pool", registry=self.registry,
-            private_splits=self.private_path)
+            private_splits=self.private_path, verify_workspace=False)
         reopened.initialize("test-gameworld", self.policy_path)
         self.assertEqual(reopened.workflow(proposal["id"])["candidate_id"], candidate["id"])
         self.assertEqual(len(reopened._items(proposal["id"], "development")), 136)
+
+    def test_production_initialization_rejects_nonfrozen_coordinator_source(self):
+        with self.assertRaises(ValueError):
+            GameWorldCoordinator(
+                self.root / "other.sqlite", self.contract_path, self.contract_hash,
+                self.fixture.baseline, self.root / "other-coordinator", self.fixture.policy,
+                self.fixture.catalog, pool="test-pool", registry=self.registry,
+                private_splits=self.private_path)
 
     def test_grpo_routes_rollout_dataset_training_serving_and_pairing(self):
         proposal = self.fixture.model_proposal()

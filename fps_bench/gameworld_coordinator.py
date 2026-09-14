@@ -8,6 +8,8 @@ from pathlib import Path
 from fps_bench.campaign_controller import CampaignController, IDENTIFIER
 from fps_bench.campaign_ledger import BudgetRefused, LedgerConflict, positive_integer
 from fps_bench.evaluation_contract import canonical, digest, exclusive_write, schedule
+from fps_bench.evaluation_contract import verify as verify_contract_sources
+from fps_bench.gameworld_evaluation import validate_contract
 from fps_bench.gameworld_grpo import validate_policy_identity
 from fps_bench.gameworld_research import (
     DEFAULT_CATALOG,
@@ -23,6 +25,7 @@ WORKFLOW_STATES = {
     "training", "serving", "evaluating", "qualified_serving_live",
     "confirming", "sealed_evaluating", "awaiting_serving_stop", "complete", "rejected",
 }
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def write_once(path, data, mode=0o400):
@@ -38,12 +41,17 @@ def write_once(path, data, mode=0o400):
 class GameWorldCoordinator:
     def __init__(self, database, contract_path, contract_hash, baseline_output, state_root,
                  policy_path=DEFAULT_POLICY, catalog_path=DEFAULT_CATALOG, telemetry_path=None,
-                 pool="gameworld-autoresearch", registry=None, private_splits=None):
+                 pool="gameworld-autoresearch", registry=None, private_splits=None,
+                 verify_workspace=True):
         self.database = Path(database)
         self.state_root = Path(state_root).resolve()
         self.pool = pool
         self.policy_path = Path(policy_path)
         self.catalog_path = Path(catalog_path)
+        if verify_workspace:
+            contract = verify_contract_sources(contract_path, contract_hash)
+            validate_contract(contract, contract_hash, private_splits)
+            verify_contract_sources(contract_path, contract_hash, workspace=ROOT)
         self.supervisor = GameWorldResearchSupervisor(
             database, baseline_output, policy_path, catalog_path, telemetry_path)
         self.controller = CampaignController(database, contract_path, contract_hash, private_splits)
