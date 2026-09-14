@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 import json
+import re
 
 from fps_bench.campaign_ledger import LedgerConflict
 from fps_bench.evaluation_contract import canonical, digest
@@ -63,6 +64,21 @@ def reconcile(ledger, specification, rows, closure):
         elif item['kind'] == 'image_import':
             if not item['provider_id'].startswith('im-') or item['state'] != 'complete':
                 raise ValueError('Image import not complete')
+        elif item['kind'] == 'deployed_app':
+            if (item['provider_id'] != item['app_id'] or not item['provider_id'].startswith('ap-')
+                    or item.get('state') != 'stopped' or item.get('running_tasks') != 0
+                    or item.get('observed_app_id') != item['provider_id']
+                    or item.get('observed_deployment_name') != item.get('deployment_name')
+                    or not isinstance(item.get('deployment_name'), str)
+                    or not item['deployment_name'].startswith('gameworld-')
+                    or not isinstance(item.get('function_id'), str)
+                    or not item['function_id'].startswith('fu-')
+                    or not isinstance(item.get('function_tag'), str) or not item['function_tag']
+                    or not isinstance(item.get('image_ids'), list) or not item['image_ids']
+                    or item['image_ids'] != sorted(set(item['image_ids']))
+                    or any(not isinstance(image, str) or not image.startswith('im-') for image in item['image_ids'])
+                    or not re.fullmatch(r'[0-9a-f]{64}', item.get('deployment_manifest_sha256', ''))):
+                raise ValueError('Deployed app closure is incomplete or differs from launch identity')
         else:
             raise ValueError('Unknown resource closure type')
     encoded = canonical(specification).decode()
@@ -114,7 +130,9 @@ def reconcile(ledger, specification, rows, closure):
                 raise LedgerConflict('Missing original closure evidence')
             def bindings(items):
                 return sorted([canonical({key: item.get(key) for key in
-                    ('reservation_id', 'kind', 'provider_id', 'app_id', 'finished_at', 'expected_tags')}).decode()
+                    ('reservation_id', 'kind', 'provider_id', 'app_id', 'finished_at', 'expected_tags',
+                     'deployment_name', 'function_id', 'function_tag', 'image_ids',
+                     'deployment_manifest_sha256')}).decode()
                     for item in items])
             if bindings(json.loads(first['evidence'])['closure']['resources']) != bindings(closed):
                 raise LedgerConflict('Closed provider resource identities cannot change')

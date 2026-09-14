@@ -160,3 +160,8 @@ the full original allocation without claiming final billed cost or issuing refun
 expired active holds after authenticated provider closure. Group/row overlap and
 refund attempts are rejected; upward revisions are retained and overruns freeze
 admission. Controller telemetry includes both observed costs and retained headroom.
+
+`scripts/modal_reconcile_deployment.py` applies the same no-refund policy to one
+stopped deployed app. It binds authenticated lifecycle and zero-task observations
+to the canonical launch manifest's app, function, image and source identities,
+saves a consistent private ledger backup, and records scoped app-hour billing rows.

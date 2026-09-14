@@ -1,6 +1,7 @@
 """Conservative group closure, deduplication, revision, and admission checks."""
 
 from datetime import datetime, timezone
+import json
 import tempfile
 from pathlib import Path
 import time
@@ -9,6 +10,8 @@ import unittest
 from fps_bench.campaign_ledger import CampaignLedger, BudgetRefused, LedgerConflict, accounting_totals
 from fps_bench.modal_reconciliation import reconcile
 from fps_bench.modal_billing import normalize_report
+from fps_bench.evaluation_contract import canonical
+from scripts.modal_reconcile_deployment import load_deployment
 
 
 class ReconciliationTests(unittest.TestCase):
@@ -127,6 +130,42 @@ class ReconciliationTests(unittest.TestCase):
         with self.assertRaisesRegex(LedgerConflict, 'identities cannot change'):
             self.reconcile()
 
+    def test_deployed_app_requires_terminal_manifest_bound_identity(self):
+        self.specification['reservation_ids'] = ['one']
+        self.closure['resources'] = [{
+            'reservation_id': 'one', 'provider_id': 'ap-test', 'app_id': 'ap-test',
+            'kind': 'deployed_app', 'state': 'stopped', 'running_tasks': 0,
+            'deployment_name': 'gameworld-qwen-baseline',
+            'observed_deployment_name': 'gameworld-qwen-baseline',
+            'observed_app_id': 'ap-test', 'function_id': 'fu-test',
+            'function_tag': 'serve',
+            'image_ids': ['im-test'], 'deployment_manifest_sha256': 'a' * 64,
+            'finished_at': '2024-01-01T02:00:00+00:00'}]
+        result = self.reconcile()
+        self.assertEqual(result['closed_reservations'], ['one'])
+        self.closure['resources'][0]['function_id'] = 'fu-replacement'
+        with self.assertRaisesRegex(LedgerConflict, 'identities cannot change'):
+            self.reconcile()
+
+    def test_deployed_app_must_be_stopped_without_tasks(self):
+        self.specification['reservation_ids'] = ['one']
+        resource = {
+            'reservation_id': 'one', 'provider_id': 'ap-test', 'app_id': 'ap-test',
+            'kind': 'deployed_app', 'state': 'stopped', 'running_tasks': 0,
+            'deployment_name': 'gameworld-qwen-baseline',
+            'observed_deployment_name': 'gameworld-qwen-baseline',
+            'observed_app_id': 'ap-test', 'function_id': 'fu-test',
+            'function_tag': 'serve',
+            'image_ids': ['im-test'], 'deployment_manifest_sha256': 'a' * 64,
+            'finished_at': '2024-01-01T02:00:00+00:00'}
+        self.closure['resources'] = [resource]
+        for change in ({'state': 'deployed'}, {'running_tasks': 1},
+                       {'deployment_manifest_sha256': 'invalid'}):
+            with self.subTest(change=change):
+                self.closure['resources'][0] = {**resource, **change}
+                with self.assertRaises(ValueError):
+                    self.reconcile()
+
     def test_per_hour_highwater_does_not_hide_other_hour_increase(self):
         self.reconcile()
         self.rows[0]['cost'] = '0.1'
@@ -137,6 +176,24 @@ class ReconciliationTests(unittest.TestCase):
         self.closure['resources'] = self.closure['resources'][:1]
         with self.assertRaises(ValueError):
             self.reconcile()
+
+    def test_deployment_manifest_loader_requires_canonical_launch_identity(self):
+        deployment = {
+            'app_id': 'ap-test', 'app_name': 'gameworld-qwen-baseline',
+            'environment': 'main', 'function_id': 'fu-test', 'function_tag': 'serve',
+            'image_ids': ['im-test'],
+            'served_model': 'qwen', 'source_sha256': 'a' * 64, 'config_sha256': 'b' * 64,
+            'deployment_tag': 'suite-baseline-v1', 'deployment_version': 'v1',
+            'git_commit': 'c' * 40, 'recorded_at': '2026-09-14T06:37:45+00:00',
+            'schema_version': 1, 'web_url': 'https://example.invalid',
+            'modal_client_version': '1.5.5'}
+        path = Path(self.directory.name) / 'deployment.json'
+        path.write_bytes(canonical(deployment))
+        _, observed = load_deployment(path)
+        self.assertEqual(observed, deployment)
+        path.write_text(json.dumps(deployment, indent=2))
+        with self.assertRaises(ValueError):
+            load_deployment(path)
 
 
 if __name__ == '__main__':
