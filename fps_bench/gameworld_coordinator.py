@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 from fps_bench.campaign_controller import CampaignController, IDENTIFIER
@@ -20,7 +21,7 @@ QUEUE_STATES = {"pending", "admitted", "live", "complete", "failed"}
 WORKFLOW_STATES = {
     "awaiting_patch", "building", "collecting_rollouts", "awaiting_dataset", "awaiting_sft_dataset",
     "training", "serving", "evaluating", "qualified_serving_live",
-    "awaiting_serving_stop", "complete", "rejected",
+    "confirming", "sealed_evaluating", "awaiting_serving_stop", "complete", "rejected",
 }
 
 
@@ -37,7 +38,7 @@ def write_once(path, data, mode=0o400):
 class GameWorldCoordinator:
     def __init__(self, database, contract_path, contract_hash, baseline_output, state_root,
                  policy_path=DEFAULT_POLICY, catalog_path=DEFAULT_CATALOG, telemetry_path=None,
-                 pool="gameworld-autoresearch", registry=None):
+                 pool="gameworld-autoresearch", registry=None, private_splits=None):
         self.database = Path(database)
         self.state_root = Path(state_root).resolve()
         self.pool = pool
@@ -45,7 +46,7 @@ class GameWorldCoordinator:
         self.catalog_path = Path(catalog_path)
         self.supervisor = GameWorldResearchSupervisor(
             database, baseline_output, policy_path, catalog_path, telemetry_path)
-        self.controller = CampaignController(database, contract_path, contract_hash)
+        self.controller = CampaignController(database, contract_path, contract_hash, private_splits)
         self.policy = self.supervisor.policy
         self.context = self.supervisor.context
         self.registry = registry
@@ -98,8 +99,12 @@ class GameWorldCoordinator:
                 "phase TEXT NOT NULL, ordinal INTEGER NOT NULL, job_id TEXT NOT NULL UNIQUE, "
                 "candidate TEXT NOT NULL, kind TEXT NOT NULL, assignment TEXT NOT NULL, "
                 "reservations TEXT NOT NULL, timeout_seconds INTEGER NOT NULL, state TEXT NOT NULL, "
+                "private_lease TEXT, "
                 "UNIQUE(workflow,phase,ordinal))"
             )
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(gameworld_work_items)")}
+            if "private_lease" not in columns:
+                connection.execute("ALTER TABLE gameworld_work_items ADD COLUMN private_lease TEXT")
             existing = connection.execute("SELECT * FROM gameworld_coordinator").fetchone()
             expected = {
                 "contract_hash": self.controller.contract_hash,
@@ -206,7 +211,7 @@ class GameWorldCoordinator:
                 payload = {
                     "candidate": row["candidate"], "kind": row["kind"],
                     "assignment": row["assignment"], "reservations": row["reservations"],
-                    "timeout_seconds": row["timeout_seconds"],
+                    "timeout_seconds": row["timeout_seconds"], "private_lease": row.get("private_lease"),
                 }
                 existing = connection.execute(
                     "SELECT * FROM gameworld_work_items WHERE id=?", (item_id,)
@@ -217,15 +222,18 @@ class GameWorldCoordinator:
                         "assignment": json.loads(existing["assignment"]),
                         "reservations": json.loads(existing["reservations"]),
                         "timeout_seconds": existing["timeout_seconds"],
+                        "private_lease": existing["private_lease"],
                     }
                     if existing["job_id"] != job_id or observed != payload:
                         raise LedgerConflict("Queued workflow work changed after registration")
                     continue
                 connection.execute(
-                    "INSERT INTO gameworld_work_items VALUES (?,?,?,?,?,?,?,?,?,?,'pending')",
+                    "INSERT INTO gameworld_work_items "
+                    "(id,workflow,phase,ordinal,job_id,candidate,kind,assignment,reservations,timeout_seconds,state,private_lease) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,'pending',?)",
                     (item_id, workflow, phase, ordinal, job_id, row["candidate"], row["kind"],
                      canonical(row["assignment"]).decode(), canonical(row["reservations"]).decode(),
-                     row["timeout_seconds"]),
+                     row["timeout_seconds"], row.get("private_lease")),
                 )
                 inserted += 1
             if inserted:
@@ -323,6 +331,106 @@ class GameWorldCoordinator:
             raise ValueError("Paired evaluation queue differs from the proposal episode bound")
         self._queue(workflow, phase, rows)
 
+    def _queue_private_evaluations(self, workflow, lease, timeout_seconds):
+        rows = [{
+            "candidate": run["candidate"], "kind": "evaluation", "assignment": run["assignment"],
+            "reservations": {}, "timeout_seconds": timeout_seconds, "private_lease": lease["id"],
+        } for run in lease["schedule"]]
+        self._queue(workflow, lease["split"], rows)
+
+    def start_confirmation(self, action_id, lease_id, randomization_seed, duration_seconds=18000):
+        workflow = self.workflow(action_id)
+        expected = "nominate_joint" if workflow["track"] == "joint" else "nominate"
+        allowed_state = "qualified_serving_live" if workflow["track"] in ("model", "joint") else "complete"
+        if (workflow["track"] not in ("driver", "model", "joint")
+                or workflow["state"] != allowed_state or not workflow["decision"]
+                or workflow["decision"].get("decision") != expected or not workflow["candidate_id"]):
+            raise LedgerConflict("Confirmation requires a qualified candidate and any live model serving")
+        lease = self.controller.issue_private_split_lease(
+            lease_id, workflow["candidate_id"], "confirmation", randomization_seed, duration_seconds)
+        timeout = min(1800, max(1, lease["expires"] - lease["issued"]))
+        self._queue_private_evaluations(workflow["proposal_id"], lease, timeout)
+        details = {**workflow["details"], "confirmation_lease": lease["id"],
+                   "confirmation_schedule_sha256": lease["schedule_hash"]}
+        self._set_workflow(workflow["proposal_id"], state="confirming", details=details)
+        return self.workflow(workflow["proposal_id"])
+
+    def start_sealed(self, lease_id, randomization_seed, duration_seconds=18000):
+        champion = self.controller.snapshot()["controller"]["champion"]
+        candidate = self._candidate(champion)
+        serving_owner = None
+        if candidate["change_class"] in ("model", "joint"):
+            model_candidate = (candidate["components"]["model"] if candidate["change_class"] == "joint"
+                               else champion)
+            with self.controller.ledger.transaction() as connection:
+                row = connection.execute(
+                    "SELECT proposal_id FROM gameworld_workflows WHERE track='model' AND candidate_id=?",
+                    (model_candidate,),
+                ).fetchone()
+            if row is None or self.workflow(row["proposal_id"])["state"] != "qualified_serving_live":
+                raise BudgetRefused("Sealed model evaluation requires its attested endpoint to remain live")
+            serving_owner = row["proposal_id"]
+        lease = self.controller.issue_private_split_lease(
+            lease_id, champion, "sealed", randomization_seed, duration_seconds)
+        workflow_id = "sealed-" + digest(canonical(lease_id))[:24]
+        details = {"sealed_lease": lease["id"], "sealed_schedule_sha256": lease["schedule_hash"]}
+        if serving_owner is not None:
+            details["serving_owner"] = serving_owner
+        if candidate["change_class"] == "joint":
+            with self.controller.ledger.transaction() as connection:
+                joint = connection.execute(
+                    "SELECT proposal_id FROM gameworld_workflows WHERE track='joint' AND candidate_id=?", (champion,)
+                ).fetchone()
+            if joint is None or self.workflow(joint["proposal_id"])["state"] != "qualified_serving_live":
+                raise BudgetRefused("Sealed joint evaluation requires its qualified workflow to remain live")
+            details["joint_workflow"] = joint["proposal_id"]
+        with self.controller.ledger.transaction() as connection:
+            existing = connection.execute(
+                "SELECT * FROM gameworld_workflows WHERE proposal_id=?", (workflow_id,)
+            ).fetchone()
+            if existing:
+                current = self._workflow(connection, workflow_id)
+                if current["candidate_id"] != champion or current["details"] != details:
+                    raise LedgerConflict("Sealed workflow identity changed")
+            else:
+                connection.execute(
+                    "INSERT INTO gameworld_workflows VALUES (?,?,?,?,?,?,?,NULL)",
+                    (workflow_id, workflow_id, "sealed", lease["comparison"], "sealed_evaluating",
+                     champion, canonical(details).decode()),
+                )
+                self.controller.ledger._event(connection, "gameworld_sealed_workflow_started", {
+                    "workflow": workflow_id, "candidate": champion, "lease": lease["id"],
+                })
+        timeout = min(1800, max(1, lease["expires"] - lease["issued"]))
+        self._queue_private_evaluations(workflow_id, lease, timeout)
+        return self.workflow(workflow_id)
+
+    def promote(self, action_id, receipt):
+        workflow = self.workflow(action_id)
+        if not workflow["candidate_id"]:
+            raise LedgerConflict("Workflow has no candidate to promote")
+        return self.controller.promote_candidate(workflow["candidate_id"], receipt)
+
+    def rollback(self, reason):
+        return self.controller.rollback_champion(reason)
+
+    def abandon_lease(self, lease_id, reason):
+        result = self.controller.abandon_private_split_lease(lease_id, reason)
+        with self.controller.ledger.transaction() as connection:
+            row = next((workflow for workflow in connection.execute(
+                "SELECT proposal_id,details FROM gameworld_workflows")
+                        if lease_id in (json.loads(workflow["details"]).get("confirmation_lease"),
+                                        json.loads(workflow["details"]).get("sealed_lease"))), None)
+        if row is not None:
+            workflow = self.workflow(row["proposal_id"])
+            state = "awaiting_serving_stop" if workflow["track"] in ("model", "joint") else "rejected"
+            self._set_workflow(row["proposal_id"], state=state, decision=result)
+            if workflow["track"] == "joint":
+                owner = workflow["details"]["serving_owner"]
+                model = self.workflow(owner)
+                self._set_workflow(owner, state="awaiting_serving_stop", decision=model["decision"])
+        return result
+
     def admit_ready(self, maximum=2):
         positive_integer(maximum, "maximum")
         admitted = []
@@ -336,7 +444,7 @@ class GameWorldCoordinator:
             try:
                 job = self.controller.admit_job(
                     row["job_id"], row["candidate"], row["kind"], json.loads(row["assignment"]),
-                    json.loads(row["reservations"]), row["timeout_seconds"])
+                    json.loads(row["reservations"]), row["timeout_seconds"], row["private_lease"])
             except BudgetRefused as error:
                 if "concurrency" in str(error):
                     break
@@ -468,12 +576,14 @@ class GameWorldCoordinator:
         if telemetry is None:
             return None
         try:
+            evaluation_split = phase if phase in ("confirmation", "sealed") else "development"
             with self.controller.ledger.transaction() as connection:
                 rows = []
                 for job in connection.execute(
                         "SELECT specification,result FROM jobs WHERE kind='evaluation'"):
                     assignment = json.loads(job["specification"])["assignment"]
-                    if assignment.get("comparison") == workflow["comparison"] and job["result"]:
+                    if (assignment.get("comparison") == workflow["comparison"]
+                            and assignment.get("split") == evaluation_split and job["result"]):
                         rows.append(json.loads(job["result"])["result"])
             complete = [row for row in rows if row.get("status") == "complete"]
             values = {
@@ -490,10 +600,11 @@ class GameWorldCoordinator:
                     values["gameworld_eval_mean_progress"] = sum(progress) / len(progress)
             candidate = self._candidate(candidate_id)
             telemetry.record(
-                "evaluation-" + digest(canonical([workflow["comparison"], candidate_id]))[:32],
+                "evaluation-" + digest(canonical([workflow["comparison"], candidate_id, phase]))[:32],
                 "gameworld-eval",
-                {"experiment": candidate_id, "phase": phase, "split": "development",
-                 "change_class": candidate["change_class"], "outcome": decision["decision"]},
+                {"experiment": candidate_id, "phase": phase, "split": evaluation_split,
+                 "change_class": candidate["change_class"],
+                 "outcome": decision.get("decision", decision.get("status", "unknown"))},
                 values,
             )
             return telemetry.flush()
@@ -583,11 +694,14 @@ class GameWorldCoordinator:
                     if workflow["track"] == "joint":
                         decision = self.controller.decide_factorial(workflow["candidate_id"])
                         self.emit_evaluation(workflow, workflow["candidate_id"], decision, "factorial")
-                        self._set_workflow(proposal_id, state="awaiting_serving_stop", decision=decision)
-                        owner = workflow["details"]["serving_owner"]
-                        with self.controller.ledger.transaction() as connection:
-                            model = self._workflow(connection, owner)
-                        self._set_workflow(owner, state="awaiting_serving_stop", decision=model["decision"])
+                        if decision["decision"] == "nominate_joint":
+                            self._set_workflow(proposal_id, state="qualified_serving_live", decision=decision)
+                        else:
+                            self._set_workflow(proposal_id, state="awaiting_serving_stop", decision=decision)
+                            owner = workflow["details"]["serving_owner"]
+                            with self.controller.ledger.transaction() as connection:
+                                model = self._workflow(connection, owner)
+                            self._set_workflow(owner, state="awaiting_serving_stop", decision=model["decision"])
                     else:
                         decision = self.controller.decide_development(workflow["candidate_id"])
                         self.emit_evaluation(workflow, workflow["candidate_id"], decision, "paired")
@@ -599,6 +713,41 @@ class GameWorldCoordinator:
                         else:
                             self._set_workflow(proposal_id, state="awaiting_serving_stop", decision=decision)
                     transitions.append({"workflow": proposal_id, "state": self.workflow(proposal_id)["state"]})
+            elif state == "confirming":
+                items = self._items(proposal_id, "confirmation")
+                if items and all(item["state"] == "complete" for item in items):
+                    decision = self.controller.decide_confirmation(workflow["details"]["confirmation_lease"])
+                    self.emit_evaluation(workflow, workflow["candidate_id"], decision, "confirmation")
+                    if workflow["track"] == "driver":
+                        self._set_workflow(
+                            proposal_id, state="complete" if decision["decision"] == "confirmation_pass" else "rejected",
+                            decision=decision)
+                    else:
+                        if decision["decision"] == "confirmation_pass":
+                            self._set_workflow(proposal_id, state="qualified_serving_live", decision=decision)
+                        else:
+                            self._set_workflow(proposal_id, state="awaiting_serving_stop", decision=decision)
+                        if workflow["track"] == "joint" and decision["decision"] != "confirmation_pass":
+                            owner = workflow["details"]["serving_owner"]
+                            with self.controller.ledger.transaction() as connection:
+                                model = self._workflow(connection, owner)
+                            self._set_workflow(owner, state="awaiting_serving_stop", decision=model["decision"])
+                    transitions.append({"workflow": proposal_id, "state": self.workflow(proposal_id)["state"]})
+            elif state == "sealed_evaluating":
+                items = self._items(proposal_id, "sealed")
+                if items and all(item["state"] == "complete" for item in items):
+                    report = self.controller.complete_sealed_evaluation(workflow["details"]["sealed_lease"])
+                    self.emit_evaluation(workflow, workflow["candidate_id"], report, "sealed")
+                    self._set_workflow(proposal_id, state="complete", decision=report)
+                    serving_owner = workflow["details"].get("serving_owner")
+                    if serving_owner is not None:
+                        owner = self.workflow(serving_owner)
+                        self._set_workflow(serving_owner, state="awaiting_serving_stop", decision=owner["decision"])
+                    joint_workflow = workflow["details"].get("joint_workflow")
+                    if joint_workflow is not None:
+                        joint = self.workflow(joint_workflow)
+                        self._set_workflow(joint_workflow, state="awaiting_serving_stop", decision=joint["decision"])
+                    transitions.append({"workflow": proposal_id, "state": "complete"})
             elif state == "awaiting_serving_stop":
                 if workflow["track"] == "joint":
                     owner = workflow["details"]["serving_owner"]
@@ -607,12 +756,16 @@ class GameWorldCoordinator:
                         with self.controller.ledger.transaction() as connection:
                             model = self._workflow(connection, owner)
                         self._finalize(model, model["candidate_id"], True, model["decision"])
-                        self._set_workflow(proposal_id, state="complete")
-                        transitions.append({"workflow": proposal_id, "state": "complete"})
+                        qualified = bool(workflow["decision"] and workflow["decision"].get("decision")
+                                         in ("nominate_joint", "confirmation_pass"))
+                        self._set_workflow(proposal_id, state="complete" if qualified else "rejected")
+                        transitions.append({"workflow": proposal_id,
+                                            "state": "complete" if qualified else "rejected"})
                 else:
                     serving = self._items(proposal_id, "serving")
                     if serving and serving[0]["state"] == "complete":
-                        qualified = bool(workflow["decision"] and workflow["decision"].get("decision") == "nominate")
+                        qualified = bool(workflow["decision"] and workflow["decision"].get("decision")
+                                         in ("nominate", "confirmation_pass"))
                         self._finalize(workflow, workflow["candidate_id"], qualified,
                                        workflow["decision"] or {"phase": "serving-stop"})
                         transitions.append({"workflow": proposal_id,
@@ -666,12 +819,19 @@ class GameWorldCoordinator:
             comparison, phase="factorial")
         return self.workflow(joint_id)
 
-    def close_model(self, action_id):
+    def close_serving(self, action_id):
         workflow = self.workflow(action_id)
-        if workflow["track"] != "model" or workflow["state"] != "qualified_serving_live":
-            raise LedgerConflict("Only a qualified live model workflow can close without a joint comparison")
+        if workflow["state"] != "qualified_serving_live" or workflow["track"] not in ("model", "joint"):
+            raise LedgerConflict("Only a qualified live model or joint workflow can stop serving")
         self._set_workflow(workflow["proposal_id"], state="awaiting_serving_stop")
+        if workflow["track"] == "joint":
+            owner = workflow["details"]["serving_owner"]
+            model = self.workflow(owner)
+            self._set_workflow(owner, state="awaiting_serving_stop", decision=model["decision"])
         return self.workflow(workflow["proposal_id"])
+
+    def close_model(self, action_id):
+        return self.close_serving(action_id)
 
     def dispatchable(self):
         return [row for row in self.runnable() if row["state"] == "reserved"]
@@ -704,13 +864,33 @@ class GameWorldCoordinator:
                 actions.append({"workflow": workflow["proposal_id"],
                                 "action": "attach-authenticated-sft-dataset"})
             elif workflow["state"] == "qualified_serving_live":
-                actions.append({"workflow": workflow["proposal_id"], "action": "start-joint-or-stop-serving"})
+                action = ("start-confirmation-or-stop-serving" if workflow["track"] == "joint"
+                          else "start-joint-or-confirmation-or-stop-serving")
+                actions.append({"workflow": workflow["proposal_id"], "action": action})
             elif workflow["state"] == "awaiting_serving_stop":
                 owner = workflow["details"].get("serving_owner", workflow["proposal_id"])
                 actions.append({"workflow": workflow["proposal_id"], "action": "terminate-serving", "owner": owner})
         actions.extend({"workflow": row["workflow"], "job_id": row["job_id"],
                         "action": ("dispatch-" if row["state"] == "reserved" else "resume-") + row["kind"]}
                        for row in self.runnable())
+        with self.controller.ledger.transaction() as connection:
+            completed_drivers = [self._workflow(connection, row["proposal_id"]) for row in connection.execute(
+                "SELECT proposal_id FROM gameworld_workflows WHERE track='driver' AND state='complete' ORDER BY rowid"
+            )]
+        actions.extend({"workflow": row["proposal_id"], "action": "start-confirmation"}
+                       for row in completed_drivers
+                       if row["decision"] and row["decision"].get("decision") == "nominate")
+        controller = self.controller.snapshot()
+        actions.extend({"candidate": row["id"], "action": "promote-confirmed-candidate"}
+                       for row in controller["candidates"] if row["state"] == "confirmed")
+        active_promotion = next((row for row in reversed(controller["promotions"])
+                                 if row["state"] == "active"), None)
+        if active_promotion is not None:
+            actions.append({"candidate": active_promotion["candidate"], "action": "rollback-available"})
+        now = int(time.time())
+        actions.extend({"lease": row["id"], "action": "abandon-expired-private-lease"}
+                       for row in controller["private_split_leases"]
+                       if row["state"] in ("issued", "active") and row["expires"] <= now)
         return actions
 
     def snapshot(self):
@@ -739,11 +919,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=[
         "initialize", "status", "register", "start", "attach-patch", "allocate", "admit",
-        "advance", "dataset", "attach-sft", "joint", "close-model",
+        "advance", "dataset", "attach-sft", "joint", "close-model", "close-serving", "confirm", "sealed",
+        "promote", "rollback", "abandon-lease",
     ])
     parser.add_argument("--database", type=Path, required=True)
     parser.add_argument("--contract", type=Path, required=True)
     parser.add_argument("--contract-sha256", required=True)
+    parser.add_argument("--private-splits", type=Path)
     parser.add_argument("--baseline", type=Path, required=True)
     parser.add_argument("--state-root", type=Path, required=True)
     parser.add_argument("--baseline-policy", type=Path)
@@ -763,10 +945,15 @@ def main():
     parser.add_argument("--maximum", type=int, default=2)
     parser.add_argument("--driver-action")
     parser.add_argument("--model-action")
+    parser.add_argument("--lease-id")
+    parser.add_argument("--randomization-seed", type=int)
+    parser.add_argument("--duration-seconds", type=int, default=18000)
+    parser.add_argument("--receipt")
+    parser.add_argument("--reason")
     args = parser.parse_args()
     coordinator = GameWorldCoordinator(
         args.database, args.contract, args.contract_sha256, args.baseline, args.state_root,
-        args.policy, args.catalog, args.telemetry, args.pool)
+        args.policy, args.catalog, args.telemetry, args.pool, private_splits=args.private_splits)
     if args.operation == "initialize":
         if not args.campaign or not args.baseline_policy:
             parser.error("initialize requires --campaign and --baseline-policy")
@@ -809,6 +996,31 @@ def main():
         if not args.action:
             parser.error("close-model requires --action")
         result = coordinator.close_model(args.action)
+    elif args.operation == "close-serving":
+        if not args.action:
+            parser.error("close-serving requires --action")
+        result = coordinator.close_serving(args.action)
+    elif args.operation == "confirm":
+        if not args.action or not args.lease_id or args.randomization_seed is None:
+            parser.error("confirm requires --action, --lease-id and --randomization-seed")
+        result = coordinator.start_confirmation(
+            args.action, args.lease_id, args.randomization_seed, args.duration_seconds)
+    elif args.operation == "sealed":
+        if not args.lease_id or args.randomization_seed is None:
+            parser.error("sealed requires --lease-id and --randomization-seed")
+        result = coordinator.start_sealed(args.lease_id, args.randomization_seed, args.duration_seconds)
+    elif args.operation == "promote":
+        if not args.action or not args.receipt:
+            parser.error("promote requires --action and --receipt")
+        result = coordinator.promote(args.action, args.receipt)
+    elif args.operation == "rollback":
+        if not args.reason:
+            parser.error("rollback requires --reason")
+        result = coordinator.rollback(args.reason)
+    elif args.operation == "abandon-lease":
+        if not args.lease_id or not args.reason:
+            parser.error("abandon-lease requires --lease-id and --reason")
+        result = coordinator.abandon_lease(args.lease_id, args.reason)
     else:
         result = coordinator.snapshot()
     print(json.dumps(result, indent=2, sort_keys=True))

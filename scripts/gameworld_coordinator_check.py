@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
 
 from PIL import Image
@@ -42,18 +43,26 @@ class CoordinatorTests(unittest.TestCase):
             "provenance": {"image": "ghcr.io/example/gameworld@sha256:" + "a" * 64},
             "rules": {"familywise_alpha": 0.05, "maximum_confirmations": 2,
                       "maximum_invalid_action_rate_increase": 0.05,
-                      "maximum_median_latency_ratio": 1.5, "minimum_absolute_improvement": 0.125},
+                      "maximum_median_latency_ratio": 1.5, "minimum_absolute_improvement": 0.125,
+                      "sealed_uses": 1},
         }
         model = self.fixture.supervisor.policy["model"]
+        private = {"nonce": "coordinator-private-fixture", "splits": {
+            "confirmation": {"tasks": split("confirmation"), "repeats": 1},
+            "sealed": {"tasks": split("sealed"), "repeats": 1},
+        }}
         self.contract = {
             "spec": spec,
             "episode_template": {"model": model["base_model"], "revision": model["base_revision"],
                                  "served_model": "qwen-baseline", "max_steps": 60},
             "public_splits": {"train": {"tasks": split("train"), "repeats": 1},
                               "development": {"tasks": split("development"), "repeats": 2}},
+            "private_split_commitment": digest(canonical(private)),
         }
         self.contract_path = self.root / "contract.json"
         self.contract_path.write_bytes(canonical(self.contract))
+        self.private_path = self.root / "private-splits.json"
+        self.private_path.write_bytes(canonical(private))
         self.contract_hash = digest(canonical(self.contract))
         self.identity = {
             "base_model": model["base_model"], "base_revision": model["base_revision"],
@@ -69,7 +78,8 @@ class CoordinatorTests(unittest.TestCase):
         self.coordinator = GameWorldCoordinator(
             self.root / "campaign.sqlite", self.contract_path, self.contract_hash,
             self.fixture.baseline, self.root / "coordinator", self.fixture.policy,
-            self.fixture.catalog, pool="test-pool", registry=self.registry)
+            self.fixture.catalog, pool="test-pool", registry=self.registry,
+            private_splits=self.private_path)
         self.coordinator.initialize("test-gameworld", self.policy_path)
 
     def finish_job(self, job_id, result, cleanup=True):
@@ -105,7 +115,8 @@ class CoordinatorTests(unittest.TestCase):
         reopened = GameWorldCoordinator(
             self.root / "campaign.sqlite", self.contract_path, self.contract_hash,
             self.fixture.baseline, self.root / "coordinator", self.fixture.policy,
-            self.fixture.catalog, pool="test-pool", registry=self.registry)
+            self.fixture.catalog, pool="test-pool", registry=self.registry,
+            private_splits=self.private_path)
         reopened.initialize("test-gameworld", self.policy_path)
         self.assertEqual(reopened.workflow(proposal["id"])["candidate_id"], candidate["id"])
         self.assertEqual(len(reopened._items(proposal["id"], "development")), 136)
@@ -246,6 +257,114 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual({item["candidate"] for item in items},
                          {"baseline", driver["id"], model["id"], joint["candidate_id"]})
         self.assertEqual({item["assignment"]["comparison"] for item in items}, {joint["comparison"]})
+        self.coordinator._set_workflow(
+            joint["proposal_id"], state="qualified_serving_live", decision={"decision": "nominate_joint"})
+        closed = self.coordinator.close_serving(joint["proposal_id"])
+        self.assertEqual(closed["state"], "awaiting_serving_stop")
+        self.assertEqual(self.coordinator.workflow("model-action")["state"], "awaiting_serving_stop")
+
+    def test_private_confirmation_promotion_sealed_and_rollback_workflow(self):
+        baseline = self.coordinator._candidate("baseline")
+        candidate = {**copy.deepcopy(baseline), "id": "confirmed-driver", "parent": "baseline",
+                     "change_class": "driver", "hypothesis": "private workflow fixture",
+                     "comparison": "confirmed-driver-comparison", "driver_sha256": "1" * 64,
+                     "patch_sha256": "2" * 64}
+        self.coordinator.controller.register_candidate(candidate)
+        with self.coordinator.controller.ledger.transaction() as connection:
+            connection.execute("UPDATE candidates SET state='nominated' WHERE id=?", (candidate["id"],))
+            connection.execute(
+                "INSERT INTO gameworld_workflows VALUES (?,?,?,?,?,?,?,?)",
+                ("confirmed-driver-workflow", "confirmed-driver-action", "driver",
+                 candidate["comparison"], "complete", candidate["id"], canonical({}).decode(),
+                 canonical({"decision": "nominate"}).decode()),
+            )
+        workflow = self.coordinator.start_confirmation(
+            "confirmed-driver-action", "confirmed-driver-lease", 31)
+        self.assertEqual(workflow["state"], "confirming")
+        items = self.coordinator._items(workflow["proposal_id"], "confirmation")
+        self.assertEqual(len(items), 68)
+        self.assertEqual({item["private_lease"] for item in items}, {"confirmed-driver-lease"})
+        while True:
+            pending = [item for item in self.coordinator._items(workflow["proposal_id"], "confirmation")
+                       if item["state"] == "pending"]
+            if not pending:
+                break
+            for admitted in self.coordinator.admit_ready(2):
+                item = next(row for row in self.coordinator._items(workflow["proposal_id"], "confirmation")
+                            if row["job_id"] == admitted["job_id"])
+                result = {**item["assignment"], "candidate": item["candidate"],
+                          "contract_sha256": self.contract_hash, "status": "complete",
+                          "success": item["candidate"] == candidate["id"], "steps": 10,
+                          "invalid_actions": 0, "seconds": 5.0}
+                self.finish_job(item["job_id"], result)
+            self.coordinator.sync()
+        self.coordinator.advance("confirmed-driver-action")
+        workflow = self.coordinator.workflow("confirmed-driver-action")
+        self.assertEqual(workflow["state"], "complete")
+        self.assertEqual(workflow["decision"]["decision"], "confirmation_pass")
+        self.coordinator.promote("confirmed-driver-action", "coordinator-confirmation-receipt")
+        self.assertEqual(self.coordinator.controller.snapshot()["controller"]["champion"], candidate["id"])
+
+        sealed = self.coordinator.start_sealed("sealed-final", 37)
+        self.assertEqual(sealed["state"], "sealed_evaluating")
+        while True:
+            pending = [item for item in self.coordinator._items(sealed["proposal_id"], "sealed")
+                       if item["state"] == "pending"]
+            if not pending:
+                break
+            for admitted in self.coordinator.admit_ready(2):
+                item = next(row for row in self.coordinator._items(sealed["proposal_id"], "sealed")
+                            if row["job_id"] == admitted["job_id"])
+                result = {**item["assignment"], "candidate": item["candidate"],
+                          "contract_sha256": self.contract_hash, "status": "complete", "success": True,
+                          "steps": 10, "invalid_actions": 0, "seconds": 5.0}
+                self.finish_job(item["job_id"], result)
+            self.coordinator.sync()
+        self.coordinator.advance(sealed["proposal_id"])
+        sealed = self.coordinator.workflow(sealed["proposal_id"])
+        self.assertEqual(sealed["state"], "complete")
+        self.assertEqual(sealed["decision"]["episodes"], 34)
+        self.coordinator.rollback("post-promotion operational regression")
+        self.assertEqual(self.coordinator.controller.snapshot()["controller"]["champion"], "baseline")
+
+    def test_promoted_model_keeps_serving_owner_for_sealed_queue(self):
+        baseline = self.coordinator._candidate("baseline")
+        model = {**copy.deepcopy(baseline), "id": "sealed-model", "parent": "baseline",
+                 "change_class": "model", "hypothesis": "sealed model fixture",
+                 "comparison": "sealed-model-comparison", "policy_sha256": "3" * 64}
+        model["model"]["adapter_sha256"] = "4" * 64
+        model["model"]["served_model"] = model["id"]
+        self.coordinator.controller.register_candidate(model)
+        decision = {"decision": "confirmation_pass"}
+        input_hash = digest(canonical(decision))
+        deadline = int(time.time()) + 600
+        self.coordinator.controller.ledger.reserve(
+            "job:sealed-model-serving:modal_micro_usd", "modal_micro_usd", 100, deadline)
+        specification = canonical({"candidate": "baseline", "kind": "serving", "assignment": {},
+                                   "reservations": {"modal_micro_usd": 100}, "timeout_seconds": 600}).decode()
+        envelope = canonical({"result": {"status": "complete", "candidate_id": model["id"]},
+                              "artifact_sha256": "e" * 64}).decode()
+        with self.coordinator.controller.ledger.transaction() as connection:
+            connection.execute("UPDATE candidates SET state='confirmed' WHERE id=?", (model["id"],))
+            connection.execute("INSERT INTO decisions VALUES (?,'confirmation',?,?)",
+                               (model["id"], input_hash, canonical(decision).decode()))
+            connection.execute(
+                "INSERT INTO jobs(id,candidate,kind,resource_group,specification,deadline,state,provider_id,result) "
+                "VALUES (?,?,?,?,?,?,'cleanup_pending',?,?)",
+                ("sealed-model-serving", "baseline", "serving", "training", specification, deadline,
+                 "modal:sealed-model-serving", envelope),
+            )
+            connection.execute(
+                "INSERT INTO gameworld_workflows VALUES (?,?,?,?,?,?,?,?)",
+                ("sealed-model-workflow", "sealed-model-action", "model", model["comparison"],
+                 "qualified_serving_live", model["id"],
+                 canonical({"serving_job": "sealed-model-serving"}).decode(),
+                 canonical(decision).decode()),
+            )
+        self.coordinator.promote("sealed-model-action", "sealed-model-confirmation")
+        sealed = self.coordinator.start_sealed("sealed-model-final", 41)
+        self.assertEqual(sealed["details"]["serving_owner"], "sealed-model-workflow")
+        self.assertEqual(len(self.coordinator._items(sealed["proposal_id"], "sealed")), 34)
 
 
 if __name__ == "__main__":

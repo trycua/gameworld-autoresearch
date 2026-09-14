@@ -108,10 +108,11 @@ is conservative and assumes independent seed clusters. Small samples can remain
 inconclusive even with positive point estimates.
 
 The pure function returns `confirmation_pass`, not permission to promote. The
-coordinator must durably limit confirmation attempts to two across the campaign,
-allow only one final sealed use, reject unauthorized nominations, and implement
-acceptance/rollback. Otherwise repeated querying invalidates the stated error
-budget. Sealed/train data are refused for candidate selection by this function.
+controller now durably limits confirmation leases to two across the campaign,
+allows one sealed lease only after a confirmed promotion, binds every private job
+to an immutable schedule and records abandoned attempts without retry. Promotion
+and rollback are separate atomic transitions with immutable receipts/history.
+Sealed/train data remain refused for candidate selection by this function.
 
 ## Checks
 

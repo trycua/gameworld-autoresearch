@@ -369,6 +369,7 @@ def main():
     parser.add_argument("--database", type=Path, required=True)
     parser.add_argument("--contract", type=Path, required=True)
     parser.add_argument("--contract-sha256", required=True)
+    parser.add_argument("--private-splits", type=Path)
     parser.add_argument("--baseline", type=Path, required=True)
     parser.add_argument("--baseline-policy", type=Path, required=True)
     parser.add_argument("--state-root", type=Path, required=True)
@@ -388,7 +389,7 @@ def main():
             "QWEN_API_KEY": os.environ.get("QWEN_API_KEY", "")}
     coordinator = GameWorldCoordinator(
         args.database, args.contract, args.contract_sha256, args.baseline, args.state_root,
-        args.policy, args.catalog, args.telemetry, args.pool)
+        args.policy, args.catalog, args.telemetry, args.pool, private_splits=args.private_splits)
     coordinator.initialize(args.campaign, args.baseline_policy)
     research = (GameWorldResearchWorker(
         coordinator, args.state_root / "research", sft_source_catalog=args.sft_source_catalog)

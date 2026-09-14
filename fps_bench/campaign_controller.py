@@ -8,7 +8,7 @@ import time
 
 from fps_bench.campaign_ledger import BudgetRefused, CampaignLedger, LedgerConflict, positive_integer, accounting_totals
 from fps_bench.evaluation_contract import (
-    canonical, digest, factorial_decision, paired_decision, split_for_controller, split_units, verify,
+    canonical, digest, factorial_decision, paired_decision, schedule, split_for_controller, split_units, verify,
 )
 
 
@@ -52,6 +52,15 @@ class CampaignController:
             connection.execute("CREATE TABLE IF NOT EXISTS decisions "
                                "(candidate TEXT NOT NULL REFERENCES candidates(id), split TEXT NOT NULL, "
                                "input_hash TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(candidate,split))")
+            connection.execute("CREATE TABLE IF NOT EXISTS private_split_leases "
+                               "(id TEXT PRIMARY KEY, split TEXT NOT NULL, candidate TEXT NOT NULL REFERENCES candidates(id), "
+                               "comparison TEXT, schedule TEXT NOT NULL, schedule_hash TEXT NOT NULL, "
+                               "expected_jobs INTEGER NOT NULL, issued INTEGER NOT NULL, expires INTEGER NOT NULL, "
+                               "state TEXT NOT NULL, result TEXT)")
+            connection.execute("CREATE TABLE IF NOT EXISTS promotions "
+                               "(candidate TEXT PRIMARY KEY REFERENCES candidates(id), previous_champion TEXT NOT NULL "
+                               "REFERENCES candidates(id), decision_hash TEXT NOT NULL, receipt TEXT NOT NULL UNIQUE, "
+                               "promoted INTEGER NOT NULL, state TEXT NOT NULL, rollback_reason TEXT, rolled_back INTEGER)")
             current = connection.execute("SELECT * FROM controller").fetchone()
             if current:
                 if current["contract_hash"] != self.contract_hash or current["duration"] != duration_seconds:
@@ -177,7 +186,7 @@ class CampaignController:
             self.ledger._event(connection, "candidate_registered", {"id": manifest["id"], "manifest_hash": digest(payload.encode())})
         return manifest["id"]
 
-    def admit_job(self, job_id, candidate, kind, assignment, reservations, timeout_seconds):
+    def admit_job(self, job_id, candidate, kind, assignment, reservations, timeout_seconds, private_lease=None):
         if not IDENTIFIER.fullmatch(job_id) or kind not in JOB_GROUPS:
             raise ValueError("Unsupported job identity or kind")
         positive_integer(timeout_seconds, "timeout_seconds")
@@ -279,9 +288,17 @@ class CampaignController:
                     or not 0 <= assignment["repeat"] < settings["repeats"]):
                 raise ValueError("Episode is not registered in the frozen split")
             if assignment["split"] in ("confirmation", "sealed"):
-                raise BudgetRefused("Private evaluation dispatch awaits a durable split-access lease")
-        specification = canonical({"candidate": candidate, "kind": kind, "assignment": assignment,
-                                   "reservations": reservations, "timeout_seconds": timeout_seconds}).decode()
+                if not IDENTIFIER.fullmatch(private_lease or ""):
+                    raise BudgetRefused("Private evaluation dispatch requires a durable split-access lease")
+            elif private_lease is not None:
+                raise ValueError("Public evaluation cannot consume a private split lease")
+        elif private_lease is not None:
+            raise ValueError("Only private evaluation jobs may consume a split lease")
+        specification_value = {"candidate": candidate, "kind": kind, "assignment": assignment,
+                               "reservations": reservations, "timeout_seconds": timeout_seconds}
+        if private_lease is not None:
+            specification_value["private_lease"] = private_lease
+        specification = canonical(specification_value).decode()
         with self.ledger.transaction() as connection:
             current = self._controller(connection)
             existing = connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -291,10 +308,33 @@ class CampaignController:
                 return dict(existing)
             self._controller(connection, admission=True)
             materialized = self._candidate(connection, candidate)
-            if materialized["state"] in ("rejected", "retired"):
+            if materialized["state"] in ("rejected", "retired", "rolled_back"):
                 raise BudgetRefused("Candidate no longer admits work")
             candidate_manifest = json.loads(materialized["manifest"])
-            if (task_contract and kind == "evaluation" and candidate_manifest["change_class"] != "baseline"
+            private_deadline = None
+            active_private = connection.execute(
+                "SELECT id FROM private_split_leases WHERE state IN ('issued','active') LIMIT 1"
+            ).fetchone()
+            if active_private is not None and private_lease is None:
+                raise BudgetRefused("Public admission is paused while a private split lease is active")
+            if private_lease is not None:
+                lease = connection.execute(
+                    "SELECT * FROM private_split_leases WHERE id=?", (private_lease,)
+                ).fetchone()
+                now = int(time.time())
+                if lease is None or lease["state"] not in ("issued", "active") or now >= lease["expires"]:
+                    raise BudgetRefused("Private split lease is missing, closed or expired")
+                if lease["split"] != assignment["split"]:
+                    raise LedgerConflict("Private split lease cannot cross evaluation splits")
+                expected = {
+                    canonical({"candidate": row["candidate"], "assignment": row["assignment"]})
+                    for row in json.loads(lease["schedule"])
+                }
+                if canonical({"candidate": candidate, "assignment": assignment}) not in expected:
+                    raise LedgerConflict("Private evaluation differs from its immutable lease schedule")
+                private_deadline = lease["expires"]
+            if (task_contract and kind == "evaluation" and private_lease is None
+                    and candidate_manifest["change_class"] != "baseline"
                     and assignment["comparison"] != candidate_manifest["comparison"]):
                 factorial = False
                 for row in connection.execute("SELECT manifest FROM candidates WHERE parent IS NOT NULL"):
@@ -333,7 +373,7 @@ class CampaignController:
                     if json.loads(row[0])["assignment"] == assignment:
                         raise LedgerConflict("Episode already assigned; hidden retries are forbidden")
             deadline = int(time.time()) + timeout_seconds
-            if deadline + 300 > current["deadline"]:
+            if deadline + 300 > current["deadline"] or private_deadline is not None and deadline > private_deadline:
                 raise BudgetRefused("Job leaves insufficient campaign cleanup time")
             for resource, amount in reservations.items():
                 self.ledger._reserve_in_transaction(connection, f"job:{job_id}:{resource}", resource, amount, deadline)
@@ -342,8 +382,321 @@ class CampaignController:
                 "VALUES (?,?,?,?,?,?,'reserved')",
                 (job_id, candidate, kind, group, specification, deadline),
             )
+            if private_lease is not None:
+                connection.execute("UPDATE private_split_leases SET state='active' WHERE id=?", (private_lease,))
             self.ledger._event(connection, "job_admitted", {"id": job_id, "candidate": candidate, "kind": kind})
             return dict(self._job(connection, job_id))
+
+    @staticmethod
+    def _lease_result(row, include_schedule=False):
+        result = {key: row[key] for key in (
+            "id", "split", "candidate", "comparison", "schedule_hash",
+            "expected_jobs", "issued", "expires", "state",
+        )}
+        result["result"] = None if row["result"] is None else json.loads(row["result"])
+        if include_schedule:
+            result["schedule"] = json.loads(row["schedule"])
+        return result
+
+    @staticmethod
+    def _lease_jobs(connection, lease):
+        jobs = []
+        for row in connection.execute("SELECT * FROM jobs WHERE kind='evaluation' ORDER BY id"):
+            if json.loads(row["specification"]).get("private_lease") == lease["id"]:
+                jobs.append(row)
+        return jobs
+
+    def issue_private_split_lease(self, lease_id, candidate, split, randomization_seed, duration_seconds=3600):
+        if not IDENTIFIER.fullmatch(lease_id) or split not in ("confirmation", "sealed"):
+            raise ValueError("Private lease requires a stable identity and protected split")
+        if type(randomization_seed) is not int or not 0 <= randomization_seed < 2**32:
+            raise ValueError("Private lease randomization seed must be uint32")
+        positive_integer(duration_seconds, "duration_seconds")
+        if duration_seconds > 21600:
+            raise ValueError("Private lease cannot outlive the pilot campaign")
+        settings = split_for_controller(self.contract, split, self.private_splits)
+        split_units(settings)
+        with self.ledger.transaction() as connection:
+            controller = self._controller(connection)
+            existing = connection.execute("SELECT * FROM private_split_leases WHERE id=?", (lease_id,)).fetchone()
+            if existing and (existing["candidate"] != candidate or existing["split"] != split):
+                raise LedgerConflict("Private lease identity is immutable")
+            if existing is None:
+                self._controller(connection, admission=True)
+                stale = connection.execute(
+                    "SELECT id FROM reservations WHERE state='held' AND expires_at<=?", (int(time.time()),)
+                ).fetchone()
+                if stale:
+                    raise BudgetRefused("Unreconciled expired resource blocks private split issuance")
+                active = connection.execute(
+                    "SELECT id,kind FROM jobs WHERE state IN ('reserved','dispatching','running','cleanup_pending') "
+                    "AND kind!='serving' LIMIT 1"
+                ).fetchone()
+                if active:
+                    raise BudgetRefused("Private split issuance waits for non-serving provider work to finish")
+            row = self._candidate(connection, candidate)
+            manifest = json.loads(row["manifest"])
+            if split == "confirmation":
+                if manifest["change_class"] == "joint":
+                    candidates = [manifest["parent"], manifest["components"]["driver"],
+                                  manifest["components"]["model"], candidate]
+                else:
+                    candidates = [manifest["parent"], candidate]
+                comparison = manifest.get("comparison")
+                if existing is None:
+                    if row["state"] != "nominated" or manifest["parent"] != controller["champion"]:
+                        raise BudgetRefused("Only a current-champion nomination may consume confirmation")
+                    limit = self.contract["spec"]["rules"]["maximum_confirmations"]
+                    used = connection.execute(
+                        "SELECT COUNT(*) FROM private_split_leases WHERE split='confirmation'"
+                    ).fetchone()[0]
+                    if used >= limit:
+                        raise BudgetRefused("Campaign confirmation-use limit reached")
+            else:
+                candidates = [candidate]
+                comparison = lease_id if self.contract["spec"].get("assignment_kind") == "gameworld-task" else None
+                if existing is None:
+                    if candidate != controller["champion"] or row["state"] != "champion":
+                        raise BudgetRefused("Sealed evaluation is restricted to the current champion")
+                    promotion = connection.execute(
+                        "SELECT 1 FROM promotions WHERE candidate=? AND state='active'", (candidate,)
+                    ).fetchone()
+                    if promotion is None:
+                        raise BudgetRefused("Sealed evaluation requires a confirmed promoted champion")
+                    limit = self.contract["spec"]["rules"]["sealed_uses"]
+                    used = connection.execute(
+                        "SELECT COUNT(*) FROM private_split_leases WHERE split='sealed'"
+                    ).fetchone()[0]
+                    if used >= limit:
+                        raise BudgetRefused("Campaign sealed-use limit reached")
+            runs = schedule(self.contract, split, candidates, randomization_seed, self.private_splits)
+            schedule_rows = []
+            for run in runs:
+                assignment = {key: value for key, value in run.items()
+                              if key not in ("candidate", "episode_id")}
+                if self.contract["spec"].get("assignment_kind") == "gameworld-task":
+                    assignment["comparison"] = comparison
+                schedule_rows.append({"candidate": run["candidate"], "assignment": assignment})
+            schedule_payload = canonical(schedule_rows).decode()
+            if existing is not None:
+                expected_expires = min(existing["issued"] + duration_seconds, controller["deadline"] - 300)
+                if (existing["comparison"] != comparison or existing["schedule"] != schedule_payload
+                        or existing["expires"] != expected_expires):
+                    raise LedgerConflict("Private lease request changed after issuance")
+                return self._lease_result(existing, include_schedule=True)
+            if connection.execute(
+                    "SELECT id FROM private_split_leases WHERE state IN ('issued','active')").fetchone():
+                raise BudgetRefused("Another private split lease is still active")
+            now = int(time.time())
+            expires = min(now + duration_seconds, controller["deadline"] - 300)
+            if expires <= now:
+                raise BudgetRefused("Campaign leaves no time for a private evaluation lease")
+            connection.execute(
+                "INSERT INTO private_split_leases VALUES (?,?,?,?,?,?,?,?,?,'issued',NULL)",
+                (lease_id, split, candidate, comparison, schedule_payload, digest(schedule_payload.encode()),
+                 len(schedule_rows), now, expires),
+            )
+            self.ledger._event(connection, "private_split_lease_issued", {
+                "id": lease_id, "candidate": candidate, "split": split,
+                "expected_jobs": len(schedule_rows), "expires": expires,
+            })
+            lease = connection.execute("SELECT * FROM private_split_leases WHERE id=?", (lease_id,)).fetchone()
+            return self._lease_result(lease, include_schedule=True)
+
+    def decide_confirmation(self, lease_id):
+        with self.ledger.transaction() as connection:
+            self._controller(connection)
+            lease = connection.execute("SELECT * FROM private_split_leases WHERE id=?", (lease_id,)).fetchone()
+            if lease is None or lease["split"] != "confirmation":
+                raise LedgerConflict("Unknown confirmation lease")
+            if lease["result"] is not None:
+                return json.loads(lease["result"])
+            jobs = self._lease_jobs(connection, lease)
+            if len(jobs) != lease["expected_jobs"]:
+                return {"decision": "incomplete", "missing_episodes": lease["expected_jobs"] - len(jobs)}
+            rows = []
+            for job in jobs:
+                if job["state"] not in ("billing_pending", "cleaned") or job["result"] is None:
+                    raise LedgerConflict("Confirmation has unfinished or uncleaned evaluation jobs")
+                rows.append(json.loads(job["result"])["result"])
+            candidate = self._candidate(connection, lease["candidate"])
+            manifest = json.loads(candidate["manifest"])
+            if manifest["change_class"] == "joint":
+                candidates = (manifest["parent"], manifest["components"]["driver"],
+                              manifest["components"]["model"], lease["candidate"])
+                result = factorial_decision(self.contract, "confirmation", rows, *candidates, self.private_splits)
+                decision_split = "confirmation-factorial"
+            else:
+                result = paired_decision(self.contract, "confirmation", rows, manifest["parent"],
+                                         lease["candidate"], self.private_splits)
+                decision_split = "confirmation"
+            if result["decision"] == "incomplete":
+                return result
+            input_hash = digest(canonical(sorted(rows, key=canonical)))
+            existing = connection.execute(
+                "SELECT * FROM decisions WHERE candidate=? AND split=?", (lease["candidate"], decision_split)
+            ).fetchone()
+            if existing and existing["input_hash"] != input_hash:
+                raise LedgerConflict("Confirmation decision inputs changed")
+            if existing is None:
+                connection.execute("INSERT INTO decisions VALUES (?,?,?,?)",
+                                   (lease["candidate"], decision_split, input_hash, canonical(result).decode()))
+            state = "confirmed" if result["decision"] == "confirmation_pass" else "rejected"
+            connection.execute("UPDATE candidates SET state=? WHERE id=?", (state, lease["candidate"]))
+            connection.execute("UPDATE private_split_leases SET state='closed',result=? WHERE id=?",
+                               (canonical(result).decode(), lease_id))
+            self.ledger._event(connection, "confirmation_decision", {
+                "lease": lease_id, "candidate": lease["candidate"], "decision": result["decision"],
+            })
+            return result
+
+    def complete_sealed_evaluation(self, lease_id):
+        with self.ledger.transaction() as connection:
+            self._controller(connection)
+            lease = connection.execute("SELECT * FROM private_split_leases WHERE id=?", (lease_id,)).fetchone()
+            if lease is None or lease["split"] != "sealed":
+                raise LedgerConflict("Unknown sealed lease")
+            if lease["result"] is not None:
+                return json.loads(lease["result"])
+            jobs = self._lease_jobs(connection, lease)
+            if len(jobs) != lease["expected_jobs"]:
+                return {"status": "incomplete", "missing_episodes": lease["expected_jobs"] - len(jobs)}
+            rows = []
+            for job in jobs:
+                if job["state"] not in ("billing_pending", "cleaned") or job["result"] is None:
+                    raise LedgerConflict("Sealed evaluation has unfinished or uncleaned jobs")
+                rows.append(json.loads(job["result"])["result"])
+            complete = [row for row in rows if row.get("status") == "complete"]
+            result = {
+                "status": "complete" if len(complete) == len(rows) else "infrastructure_failure",
+                "episodes": len(rows), "failed_episodes": len(rows) - len(complete),
+                "success_rate": (sum(bool(row.get("success")) for row in complete) / len(complete)
+                                 if complete else None),
+                "input_hash": digest(canonical(sorted(rows, key=canonical))),
+            }
+            connection.execute("UPDATE private_split_leases SET state='closed',result=? WHERE id=?",
+                               (canonical(result).decode(), lease_id))
+            self.ledger._event(connection, "sealed_evaluation_completed", {
+                "lease": lease_id, "candidate": lease["candidate"], "status": result["status"],
+            })
+            return result
+
+    def abandon_private_split_lease(self, lease_id, reason):
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 4000:
+            raise ValueError("Abandoning a private lease requires a bounded reason")
+        with self.ledger.transaction() as connection:
+            self._controller(connection)
+            lease = connection.execute("SELECT * FROM private_split_leases WHERE id=?", (lease_id,)).fetchone()
+            if lease is None:
+                raise LedgerConflict("Unknown private split lease")
+            if lease["result"] is not None:
+                result = json.loads(lease["result"])
+                if lease["state"] != "abandoned" or result.get("reason") != reason:
+                    raise LedgerConflict("Private lease terminal result is immutable")
+                return result
+            jobs = self._lease_jobs(connection, lease)
+            if any(job["state"] != "cleaned" for job in jobs):
+                raise BudgetRefused("Private lease cannot close before every admitted provider job is cleaned")
+            result = {"status": "infrastructure_failure", "reason": reason,
+                      "admitted_jobs": len(jobs), "expected_jobs": lease["expected_jobs"]}
+            connection.execute("UPDATE private_split_leases SET state='abandoned',result=? WHERE id=?",
+                               (canonical(result).decode(), lease_id))
+            if lease["split"] == "confirmation":
+                connection.execute("UPDATE candidates SET state='rejected' WHERE id=? AND state='nominated'",
+                                   (lease["candidate"],))
+            self.ledger._event(connection, "private_split_lease_abandoned", {
+                "lease": lease_id, "candidate": lease["candidate"], "split": lease["split"],
+                "reason": reason, "admitted_jobs": len(jobs),
+            })
+            return result
+
+    def promote_candidate(self, candidate, receipt):
+        if not isinstance(receipt, str) or not receipt.strip() or len(receipt) > 4000:
+            raise ValueError("Promotion requires a bounded trusted receipt")
+        with self.ledger.transaction() as connection:
+            controller = self._controller(connection, admission=True)
+            row = self._candidate(connection, candidate)
+            manifest = json.loads(row["manifest"])
+            if row["state"] == "champion" and controller["champion"] == candidate:
+                promotion = connection.execute("SELECT * FROM promotions WHERE candidate=?", (candidate,)).fetchone()
+                if promotion is None or promotion["receipt"] != receipt:
+                    raise LedgerConflict("Promotion receipt is immutable")
+                return dict(promotion)
+            if row["state"] != "confirmed" or manifest["parent"] != controller["champion"]:
+                raise BudgetRefused("Promotion requires confirmed evidence against the current champion")
+            split = "confirmation-factorial" if manifest["change_class"] == "joint" else "confirmation"
+            decision = connection.execute(
+                "SELECT * FROM decisions WHERE candidate=? AND split=?", (candidate, split)
+            ).fetchone()
+            if decision is None or json.loads(decision["result"])["decision"] != "confirmation_pass":
+                raise LedgerConflict("Promotion requires an immutable passing confirmation decision")
+            live_serving = []
+            expected_served = (manifest["components"]["model"] if manifest["change_class"] == "joint"
+                               else candidate if manifest["change_class"] == "model" else None)
+            for job in connection.execute("SELECT * FROM jobs WHERE state!='cleaned'"):
+                result = None if job["result"] is None else json.loads(job["result"])["result"]
+                if (expected_served is None or job["kind"] != "serving" or job["state"] != "cleanup_pending"
+                        or result is None or result.get("candidate_id") != expected_served):
+                    raise BudgetRefused("Promotion waits for provider cleanup")
+                live_serving.append(job["id"])
+            allowed_holds = {f"job:{job_id}:modal_micro_usd" for job_id in live_serving}
+            held = {row["id"] for row in connection.execute(
+                "SELECT id FROM reservations WHERE state='held'")}
+            if held - allowed_holds:
+                raise BudgetRefused("Promotion waits for resource reconciliation")
+            if connection.execute(
+                    "SELECT id FROM private_split_leases WHERE state IN ('issued','active') LIMIT 1").fetchone():
+                raise BudgetRefused("Promotion waits for private lease closure")
+            previous = controller["champion"]
+            now = int(time.time())
+            connection.execute("UPDATE candidates SET state='retired' WHERE id!=? AND state IN "
+                               "('materialized','nominated','confirmed','champion')", (candidate,))
+            connection.execute("UPDATE candidates SET state='champion' WHERE id=?", (candidate,))
+            connection.execute("UPDATE controller SET champion=?", (candidate,))
+            connection.execute("INSERT INTO promotions VALUES (?,?,?,?,?,'active',NULL,NULL)",
+                               (candidate, previous, decision["input_hash"], receipt, now))
+            self.ledger._event(connection, "candidate_promoted", {
+                "candidate": candidate, "previous_champion": previous, "receipt": receipt,
+            })
+            return dict(connection.execute("SELECT * FROM promotions WHERE candidate=?", (candidate,)).fetchone())
+
+    def rollback_champion(self, reason):
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 4000:
+            raise ValueError("Rollback requires a bounded reason")
+        with self.ledger.transaction() as connection:
+            controller = self._controller(connection)
+            current = controller["champion"]
+            promotion = connection.execute(
+                "SELECT * FROM promotions WHERE candidate=? AND state='active'", (current,)
+            ).fetchone()
+            if promotion is None:
+                raise BudgetRefused("The current champion has no reversible promotion")
+            if connection.execute("SELECT id FROM jobs WHERE state!='cleaned' LIMIT 1").fetchone():
+                raise BudgetRefused("Rollback waits for provider cleanup")
+            candidates = [dict(row) for row in connection.execute("SELECT id,parent,state FROM candidates")]
+            descendants = {current}
+            changed = True
+            while changed:
+                changed = False
+                for candidate in candidates:
+                    if candidate["parent"] in descendants and candidate["id"] not in descendants:
+                        descendants.add(candidate["id"])
+                        changed = True
+            for identity in descendants:
+                connection.execute("UPDATE candidates SET state=? WHERE id=?",
+                                   ("rolled_back" if identity == current else "retired", identity))
+            previous = promotion["previous_champion"]
+            connection.execute("UPDATE candidates SET state='champion' WHERE id=?", (previous,))
+            connection.execute("UPDATE controller SET champion=?", (previous,))
+            now = int(time.time())
+            connection.execute(
+                "UPDATE promotions SET state='rolled_back',rollback_reason=?,rolled_back=? WHERE candidate=?",
+                (reason, now, current),
+            )
+            self.ledger._event(connection, "champion_rolled_back", {
+                "candidate": current, "restored_champion": previous, "reason": reason,
+            })
+            return {"rolled_back": current, "restored_champion": previous, "reason": reason}
 
     def begin_dispatch(self, job_id):
         with self.ledger.transaction() as connection:
@@ -681,24 +1034,63 @@ class CampaignController:
             jobs = [dict(row) for row in connection.execute(
                 "SELECT id,candidate,kind,state,provider_id,provider_cleanup_receipt,cleanup_receipt "
                 "FROM jobs ORDER BY id")]
+            leases = [self._lease_result(row) for row in connection.execute(
+                "SELECT * FROM private_split_leases ORDER BY issued,id")]
+            promotions = [dict(row) for row in connection.execute(
+                "SELECT * FROM promotions ORDER BY promoted,candidate")]
         return {"controller": settings, "candidates": candidates, "jobs": jobs,
+                "private_split_leases": leases, "promotions": promotions,
                 "budget": self.ledger.snapshot(), "recovery": self.recovery_actions()}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=["status", "recovery", "stop"])
+    parser.add_argument("operation", choices=["status", "recovery", "stop", "private-lease",
+                                               "confirmation-decision", "sealed-report", "abandon-lease",
+                                               "promote", "rollback"])
     parser.add_argument("--db", type=Path, required=True)
     parser.add_argument("--contract", type=Path, required=True)
     parser.add_argument("--expected-hash", required=True)
+    parser.add_argument("--private-splits", type=Path)
     parser.add_argument("--reason")
+    parser.add_argument("--lease-id")
+    parser.add_argument("--candidate")
+    parser.add_argument("--split", choices=["confirmation", "sealed"])
+    parser.add_argument("--randomization-seed", type=int)
+    parser.add_argument("--duration-seconds", type=int, default=3600)
+    parser.add_argument("--receipt")
     args = parser.parse_args()
-    controller = CampaignController(args.db, args.contract, args.expected_hash)
+    controller = CampaignController(args.db, args.contract, args.expected_hash, args.private_splits)
     if args.operation == "stop":
         if not args.reason:
             parser.error("stop requires --reason")
         controller.stop(args.reason)
         result = {"stop_recorded": True, "provider_cleanup_not_executed": True, "obligations": controller.recovery_actions()}
+    elif args.operation == "private-lease":
+        if not args.lease_id or not args.candidate or args.randomization_seed is None or not args.split:
+            parser.error("private-lease requires --lease-id, --candidate, --split and --randomization-seed")
+        result = controller.issue_private_split_lease(
+            args.lease_id, args.candidate, args.split, args.randomization_seed, args.duration_seconds)
+    elif args.operation == "confirmation-decision":
+        if not args.lease_id:
+            parser.error("confirmation-decision requires --lease-id")
+        result = controller.decide_confirmation(args.lease_id)
+    elif args.operation == "sealed-report":
+        if not args.lease_id:
+            parser.error("sealed-report requires --lease-id")
+        result = controller.complete_sealed_evaluation(args.lease_id)
+    elif args.operation == "abandon-lease":
+        if not args.lease_id or not args.reason:
+            parser.error("abandon-lease requires --lease-id and --reason")
+        result = controller.abandon_private_split_lease(args.lease_id, args.reason)
+    elif args.operation == "promote":
+        if not args.candidate or not args.receipt:
+            parser.error("promote requires --candidate and --receipt")
+        result = controller.promote_candidate(args.candidate, args.receipt)
+    elif args.operation == "rollback":
+        if not args.reason:
+            parser.error("rollback requires --reason")
+        result = controller.rollback_champion(args.reason)
     elif args.operation == "recovery":
         result = controller.recovery_actions()
     else:

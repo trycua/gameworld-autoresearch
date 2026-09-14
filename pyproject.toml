@@ -1,7 +1,7 @@
 [project]
 name = "fps-bench"
 version = "0.1.0"
-description = "First-person movement benchmark for cua-driver (cua-bench task + Fleet autoresearch loop)"
+description = "GameWorld joint autoresearch built from the FPS-bench Fleet loop"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "cua-bench[browser]==0.2.11",

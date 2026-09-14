@@ -14,6 +14,11 @@ The coordinator currently persists and validates these paths:
   paired development episodes.
 - Qualified driver plus live qualified model -> fresh comparison identity -> all
   272 cells of the 2x2 baseline/driver/model/joint development schedule.
+- Nominated isolated or joint candidate -> controller-issued private confirmation
+  lease -> exact protected task queue -> immutable confirmation decision -> explicit
+  promotion after provider cleanup, with reversible champion history.
+- Promoted champion -> one controller-issued sealed lease -> 34-task final report
+  that cannot select or promote a candidate, followed by candidate-serving cleanup.
 - SFT proposals accept only task-prefixed train-split demonstrations with an
   immutable source receipt, explicit rights, a privileged-state exclusion and a
   frozen driver/contract identity. They then use the same Modal export, adapter
@@ -40,7 +45,8 @@ PYTHONPATH=. python3 -m fps_bench.gameworld_coordinator status \
 ```
 
 Use `register`, `start`, `attach-patch`, `allocate`, `admit`, `advance`,
-`dataset`, `attach-sft`, `joint` and `close-model` for individual state transitions. `status`
+`dataset`, `attach-sft`, `joint`, `confirm`, `promote`, `sealed`, `rollback`,
+`abandon-lease` and `close-serving` for individual state transitions. `status`
 returns `required_actions`, including exactly-once dispatchable job IDs. Reopening
 the coordinator with the same campaign, contract, baseline policy and state root
 preserves queues and does not duplicate jobs.
@@ -85,6 +91,7 @@ independent watchdog active:
 PYTHONPATH=. python3 -m fps_bench.gameworld_runner once \
   --database /durable/campaign.sqlite \
   --contract /trusted/contract.json --contract-sha256 "$CONTRACT_SHA256" \
+  --private-splits /trusted/private-splits.json \
   --baseline /trusted/suite-baseline-v1 --baseline-policy /trusted/policy.json \
   --state-root /durable/coordinator --policy configs/gameworld-autoresearch.json \
   --catalog configs/evaluation/gameworld-suite-v1.json \
@@ -111,6 +118,7 @@ The offline checks cover driver/GRPO routing, the full 34-game paired and factor
 queue sizes, comparison isolation, explicit model budget ownership, failed-rollout
 rejection, authenticated SFT training/serving, proposal/patch materialization,
 credential filtering, closed-hour billing recovery and restart idempotency. They do not
-constitute a live Fleet or Modal campaign. Remaining gates are current image/
-contract publication, production watchdog deployment, live reconciliation evidence,
-private split leases, promotion/rollback and bounded real vertical slices.
+constitute a live Fleet or Modal campaign. Protected-split tests cover all 34
+confirmation tasks and all 34 sealed tasks, promotion and rollback. Remaining gates
+are current image/contract publication, production watchdog deployment, authenticated
+LiteLLM settlement and bounded real vertical slices.

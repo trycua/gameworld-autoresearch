@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import unittest
 
-from fps_bench.evaluation_contract import digest
+from fps_bench.evaluation_contract import canonical, digest
 from fps_bench.gameworld_runner import GameWorldProviderRunner
 import scripts.gameworld_coordinator_check as coordinator_fixtures
 
@@ -175,6 +175,46 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(result["research"][0]["outcome"], "attached")
         self.assertEqual(result["dispatch"][0]["kind"], "driver_build")
         self.assertEqual(fleet.driver_attempts, 1)
+
+    def test_runner_dispatches_only_lease_bound_confirmation_jobs(self):
+        fixture = coordinator_fixtures.CoordinatorTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        coordinator = fixture.coordinator
+        baseline = coordinator._candidate("baseline")
+        artifact_root = fixture.root / "runner-confirmed-driver"
+        artifact_root.mkdir()
+        driver = artifact_root / "cua-driver"
+        driver.write_bytes(b"candidate-driver")
+        candidate = {**copy.deepcopy(baseline), "id": "runner-confirmed-driver", "parent": "baseline",
+                     "change_class": "driver", "hypothesis": "runner confirmation fixture",
+                     "comparison": "runner-confirmation", "driver_sha256": digest(driver.read_bytes()),
+                     "patch_sha256": "2" * 64, "artifact_root": str(artifact_root)}
+        coordinator.controller.register_candidate(candidate)
+        with coordinator.controller.ledger.transaction() as connection:
+            connection.execute("UPDATE candidates SET state='nominated' WHERE id=?", (candidate["id"],))
+            connection.execute(
+                "INSERT INTO gameworld_workflows VALUES (?,?,?,?,?,?,?,?)",
+                ("runner-confirmation-workflow", "runner-confirmation-action", "driver",
+                 candidate["comparison"], "complete", candidate["id"], canonical({}).decode(),
+                 canonical({"decision": "nominate"}).decode()),
+            )
+        coordinator.start_confirmation(
+            "runner-confirmation-action", "runner-confirmation-lease", 43)
+        lifecycle = FleetLifecycle(coordinator.controller)
+        fleet = FleetExecutor(coordinator, lifecycle)
+        runner = GameWorldProviderRunner(
+            coordinator, MODAL,
+            {"QWEN_BASE_URL": "https://baseline.example/v1", "QWEN_API_KEY": "x" * 32},
+            fleet_lifecycle=lifecycle, fleet_executor=fleet)
+        result = self.run_async(runner.run_once(2))
+        self.assertEqual(len(result["dispatch"]), 2)
+        self.assertEqual({row["candidate"] for row in fleet.evaluations},
+                         {"baseline", candidate["id"]})
+        with coordinator.controller.ledger.transaction() as connection:
+            leases = {json.loads(row["specification"]).get("private_lease")
+                      for row in connection.execute("SELECT specification FROM jobs")}
+        self.assertEqual(leases, {"runner-confirmation-lease"})
 
     def test_research_stop_rechecks_gate_before_admission(self):
         class Research:

@@ -4,11 +4,10 @@
 
 `fps_bench/campaign_controller.py` implements durable controller state, while
 `fps_bench/gameworld_coordinator.py` persists the GameWorld driver, GRPO, serving,
-paired-development and qualified-factorial workflow queues. Fleet source-patch,
-rollout/evaluation, Modal training and adapter-serving adapters exist and validate
-immutable results. The remaining production gap is the credentialed provider
-runner/watchdog plus live vertical-slice evidence, SFT ingestion, billing closure,
-private split leases and promotion/rollback.
+paired-development, qualified-factorial and protected-split workflow queues. Fleet
+source-patch, rollout/evaluation, Modal training and adapter-serving adapters exist
+and validate immutable results. The remaining production gap is current image and
+contract publication plus bounded live provider evidence.
 
 Do not substitute the synthetic rehearsal for the live launch rehearsal. Linear:
 CUA-1172, with budget integration in CUA-1167 and the final rehearsal in CUA-1176.
@@ -58,9 +57,12 @@ Do not interpret a transient provider lookup miss as proof that no job was creat
 Training assignments require a hashed dataset manifest and only registered train
 seeds. The production Modal lifecycle additionally requires controller-registered
 rollout receipts and revalidates dataset/custody bytes before dispatch; see
-`AUTHENTICATED_TRAINING.md`. Structural job admission alone cannot launch training. Private
-split jobs are denied pending durable access leases. Public development assignment
-is unique per candidate/seed/repetition; hidden retries cannot be substituted.
+`AUTHENTICATED_TRAINING.md`. Structural job admission alone cannot launch training.
+Private jobs require a durable lease that binds candidate identities, every exact
+assignment, randomized order, expiry and schedule hash. Issuance consumes one of
+the predeclared confirmation/sealed uses even if the lease is later abandoned.
+Abandonment waits for cleanup and records an infrastructure failure; it never grants
+a retry. Public development assignment is unique per candidate/task/repetition.
 
 ## Decisions and recovery
 
@@ -68,9 +70,14 @@ The development decision uses only recorded, provider-cleaned jobs for the
 candidate and its parent under the candidate's comparison identity. Missing or
 infrastructure-failed results cannot nominate. Qualified isolated driver and model
 candidates can be registered as a joint candidate and evaluated through a fresh
-2x2 factorial comparison. Decision inputs and outcomes are immutable. **No path
-changes the champion automatically.** Confirmation-use limits, private leases,
-promotion and rollback remain required.
+2x2 factorial comparison. Decision inputs and outcomes are immutable. Development
+only nominates. A separate confirmation lease can mark a candidate `confirmed`;
+another explicit transaction promotes it, retires stale candidates and changes the
+champion. Promotion requires all leases closed and all unrelated provider work and
+accounting reconciled; an attested candidate serving endpoint may remain live for
+the final sealed run. Rollback restores the previous champion, retires descendants
+and preserves the original decisions. The one sealed use is available only after a
+confirmed promotion and records a report without selecting a candidate.
 
 `recovery_actions` reports actionable states:
 
@@ -131,10 +138,11 @@ python3 -m unittest discover -s scripts -p campaign_ledger_check.py -v
 python3 -m unittest discover -s scripts -p research_gateway_check.py -v
 ```
 
-17 controller checks cover multi-process concurrency, atomic admission/cleanup,
+24 controller checks cover multi-process concurrency, atomic admission/cleanup,
 immutable manifests/results, model/driver separation, train-only assignments,
 ambiguous dispatch after restart, zero-cost undispatched cancellation, deadline and
-budget refusal, stop/cleanup, and winning/losing synthetic development rounds.
+budget refusal, stop/cleanup, exact protected-split leases, bounded abandonment,
+paired and factorial confirmation, sealed reporting, promotion and rollback.
 
 Persisted rehearsal: `results/runs/controller-offline-20260913/report.json`.
 It uses the real frozen development schedule but **fabricated provider results**:

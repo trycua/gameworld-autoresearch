@@ -211,6 +211,111 @@ class ControllerTests(unittest.TestCase):
             self.controller.admit_job("private-job", "candidate", "evaluation",
                                       {"split": "confirmation", "seed": 2001, "repeat": 0}, {"modal_micro_usd": 100}, 600)
 
+    def test_private_lease_binds_exact_schedule_and_survives_restart(self):
+        self.run_development(candidate_wins=True)
+        self.controller.decide_development("candidate")
+        lease = self.controller.issue_private_split_lease(
+            "confirm-candidate", "candidate", "confirmation", 17, 3600)
+        self.assertEqual(lease["expected_jobs"], 48)
+        self.assertEqual(len(lease["schedule"]), 48)
+        reopened = CampaignController(
+            self.database, self.contract_path, self.hash, self.private_path)
+        reopened.initialize("offline-controller")
+        replay = reopened.issue_private_split_lease(
+            "confirm-candidate", "candidate", "confirmation", 17, 3600)
+        self.assertEqual(replay["schedule_hash"], lease["schedule_hash"])
+        self.assertEqual(replay["schedule"], lease["schedule"])
+        with self.assertRaises(LedgerConflict):
+            reopened.issue_private_split_lease(
+                "confirm-candidate", "candidate", "confirmation", 999, 3600)
+        run = lease["schedule"][0]
+        reopened.admit_job("private-bound", run["candidate"], "evaluation", run["assignment"],
+                           {"modal_micro_usd": 100}, 600, private_lease=lease["id"])
+        unleased = {**copy.deepcopy(self.candidate), "id": "candidate-two",
+                    "driver_sha256": "e" * 64, "patch_sha256": "f" * 64}
+        reopened.register_candidate(unleased)
+        with self.assertRaises(LedgerConflict):
+            reopened.admit_job("private-wrong", unleased["id"], "evaluation", run["assignment"],
+                               {"modal_micro_usd": 100}, 600, private_lease=lease["id"])
+        with self.assertRaises(ValueError):
+            reopened.admit_job("public-with-lease", "candidate", "evaluation",
+                               {"split": "development", "seed": 1001, "repeat": 0},
+                               {"modal_micro_usd": 100}, 600, private_lease=lease["id"])
+        snapshot = reopened.snapshot()
+        self.assertNotIn("schedule", snapshot["private_split_leases"][0])
+        with self.assertRaises(BudgetRefused):
+            reopened.abandon_private_split_lease(lease["id"], "provider still active")
+        reopened.begin_dispatch("private-bound")
+        reopened.provider_started("private-bound", "fake-provider:private-bound")
+        reopened.record_result("private-bound", {
+            **run["assignment"], "candidate": run["candidate"], "contract_sha256": self.hash,
+            "status": "complete", "success": False, "steps": 60, "invalid_actions": 0, "seconds": 100,
+        }, "d" * 64)
+        reopened.cleanup_confirmed(
+            "private-bound", "fake-validated-receipt:private-bound", {"modal_micro_usd": 40})
+        abandoned = reopened.abandon_private_split_lease(lease["id"], "bounded provider failure")
+        self.assertEqual(abandoned["status"], "infrastructure_failure")
+        self.assertEqual(next(row for row in reopened.snapshot()["candidates"] if row["id"] == "candidate")["state"],
+                         "rejected")
+
+    def test_confirmation_promotion_sealed_report_and_rollback(self):
+        with self.assertRaises(BudgetRefused):
+            self.controller.issue_private_split_lease("sealed-baseline", "baseline", "sealed", 11, 3600)
+        self.run_development(candidate_wins=True)
+        self.controller.decide_development("candidate")
+        with self.assertRaises(BudgetRefused):
+            self.controller.promote_candidate("candidate", "premature")
+        lease = self.controller.issue_private_split_lease(
+            "confirm-candidate", "candidate", "confirmation", 17, 3600)
+        for index, run in enumerate(lease["schedule"]):
+            job = f"confirm-{index}"
+            self.controller.admit_job(job, run["candidate"], "evaluation", run["assignment"],
+                                      {"modal_micro_usd": 100}, 600, private_lease=lease["id"])
+            self.finish(job, {**run["assignment"], "candidate": run["candidate"],
+                              "contract_sha256": self.hash, "status": "complete",
+                              "success": run["candidate"] == "candidate", "steps": 60,
+                              "invalid_actions": 0, "seconds": 100}, actual=40)
+        decision = self.controller.decide_confirmation(lease["id"])
+        self.assertEqual(decision["decision"], "confirmation_pass")
+        expires = int(time.time()) + 600
+        self.controller.ledger.reserve("unresolved-promotion-hold", "modal_micro_usd", 100, expires)
+        with self.assertRaises(BudgetRefused):
+            self.controller.promote_candidate("candidate", "trusted-confirmation-receipt")
+        self.controller.ledger.settle("unresolved-promotion-hold", 40, "resolved-promotion-hold")
+        promotion = self.controller.promote_candidate("candidate", "trusted-confirmation-receipt")
+        self.assertEqual(promotion["previous_champion"], "baseline")
+        self.assertEqual(self.controller.snapshot()["controller"]["champion"], "candidate")
+        self.assertEqual(
+            self.controller.promote_candidate("candidate", "trusted-confirmation-receipt")["state"], "active")
+        with self.assertRaises(LedgerConflict):
+            self.controller.promote_candidate("candidate", "changed-receipt")
+
+        sealed = self.controller.issue_private_split_lease(
+            "sealed-candidate", "candidate", "sealed", 23, 3600)
+        for index, run in enumerate(sealed["schedule"]):
+            job = f"sealed-{index}"
+            self.controller.admit_job(job, run["candidate"], "evaluation", run["assignment"],
+                                      {"modal_micro_usd": 100}, 600, private_lease=sealed["id"])
+            self.finish(job, {**run["assignment"], "candidate": run["candidate"],
+                              "contract_sha256": self.hash, "status": "complete", "success": True,
+                              "steps": 60, "invalid_actions": 0, "seconds": 100}, actual=40)
+        report = self.controller.complete_sealed_evaluation(sealed["id"])
+        self.assertEqual(report["status"], "complete")
+        self.assertEqual(report["episodes"], 32)
+        with self.assertRaises(BudgetRefused):
+            self.controller.issue_private_split_lease(
+                "sealed-again", "candidate", "sealed", 29, 3600)
+
+        rollback = self.controller.rollback_champion("live regression outside frozen selection")
+        self.assertEqual(rollback["restored_champion"], "baseline")
+        snapshot = self.controller.snapshot()
+        self.assertEqual(snapshot["controller"]["champion"], "baseline")
+        self.assertEqual(next(row for row in snapshot["candidates"] if row["id"] == "candidate")["state"],
+                         "rolled_back")
+        self.assertEqual(snapshot["promotions"][0]["state"], "rolled_back")
+        with self.assertRaises(BudgetRefused):
+            self.admit("rolled-back-work", candidate="candidate")
+
     def test_development_round_retains_champion_and_nominates_only(self):
         self.run_development(candidate_wins=True)
         result = self.controller.decide_development("candidate")
@@ -250,8 +355,22 @@ class GameWorldControllerTests(unittest.TestCase):
         self.tasks = [
             {"id": f"0{index}_game--0{index}_03", "game": f"0{index}_game",
              "task": f"0{index}_03", "seed": 42}
-            for index in range(1, 5)
+            for index in range(1, 7)
         ]
+        confirmation = [
+            {"id": f"0{index}_game--0{index}_04", "game": f"0{index}_game",
+             "task": f"0{index}_04", "seed": 42}
+            for index in range(1, 7)
+        ]
+        sealed = [
+            {"id": f"0{index}_game--0{index}_05", "game": f"0{index}_game",
+             "task": f"0{index}_05", "seed": 42}
+            for index in range(1, 7)
+        ]
+        private = {"nonce": "gameworld-private-fixture", "splits": {
+            "confirmation": {"tasks": confirmation, "repeats": 1},
+            "sealed": {"tasks": sealed, "repeats": 1},
+        }}
         train = [{"id": "01_game--01_01", "game": "01_game", "task": "01_01", "seed": 42}]
         spec = {"suite_id": "gameworld-task-controller", "assignment_kind": "gameworld-task",
                 "provenance": {"image": "ghcr.io/example/gameworld@sha256:" + "a" * 64},
@@ -263,11 +382,14 @@ class GameWorldControllerTests(unittest.TestCase):
         self.contract = {"spec": spec, "episode_template": template, "public_splits": {
             "train": {"tasks": train, "repeats": 1},
             "development": {"tasks": self.tasks, "repeats": 1},
-        }}
+        }, "private_split_commitment": digest(canonical(private))}
         self.contract_path = self.home / "contract.json"
         self.contract_path.write_bytes(canonical(self.contract))
+        self.private_path = self.home / "private.json"
+        self.private_path.write_bytes(canonical(private))
         self.hash = digest(canonical(self.contract))
-        self.controller = CampaignController(self.home / "controller.sqlite", self.contract_path, self.hash)
+        self.controller = CampaignController(
+            self.home / "controller.sqlite", self.contract_path, self.hash, self.private_path)
         self.controller.initialize("gameworld-controller")
         self.baseline = {"id": "baseline", "parent": None, "change_class": "baseline",
                          "hypothesis": "baseline", "contract_hash": self.hash,
@@ -348,6 +470,41 @@ class GameWorldControllerTests(unittest.TestCase):
             self.controller.admit_job("wrong-comparison", candidate["id"], "evaluation", assignment,
                                       {}, 600)
 
+    def test_model_promotion_preserves_only_its_attested_live_serving(self):
+        model = {**copy.deepcopy(self.baseline), "id": "model-candidate", "parent": "baseline",
+                 "change_class": "model", "policy_sha256": "4" * 64,
+                 "comparison": "model-confirmation"}
+        model["model"]["adapter_sha256"] = "5" * 64
+        model["model"]["served_model"] = model["id"]
+        self.controller.register_candidate(model)
+        result = {"decision": "confirmation_pass"}
+        input_hash = digest(canonical(result))
+        with self.controller.ledger.transaction() as connection:
+            connection.execute("UPDATE candidates SET state='confirmed' WHERE id=?", (model["id"],))
+            connection.execute("INSERT INTO decisions VALUES (?,'confirmation',?,?)",
+                               (model["id"], input_hash, canonical(result).decode()))
+        deadline = int(time.time()) + 600
+        self.controller.ledger.reserve(
+            "job:live-serving:modal_micro_usd", "modal_micro_usd", 100, deadline)
+        specification = canonical({"candidate": "baseline", "kind": "serving", "assignment": {},
+                                   "reservations": {"modal_micro_usd": 100}, "timeout_seconds": 600}).decode()
+        envelope = canonical({"result": {"status": "complete", "candidate_id": model["id"]},
+                              "artifact_sha256": "e" * 64}).decode()
+        with self.controller.ledger.transaction() as connection:
+            connection.execute(
+                "INSERT INTO jobs(id,candidate,kind,resource_group,specification,deadline,state,provider_id,result) "
+                "VALUES (?,?,?,?,?,?,'cleanup_pending',?,?)",
+                ("live-serving", "baseline", "serving", "training", specification, deadline,
+                 "modal:live-serving", envelope),
+            )
+        self.controller.promote_candidate(model["id"], "live-serving-confirmation")
+        self.assertEqual(self.controller.snapshot()["controller"]["champion"], model["id"])
+        with self.assertRaises(BudgetRefused):
+            self.controller.rollback_champion("endpoint still live")
+        self.controller.cleanup_confirmed(
+            "live-serving", "modal-serving-stopped", {"modal_micro_usd": 40})
+        self.assertEqual(self.controller.rollback_champion("post-sealed rollback")["restored_champion"], "baseline")
+
     def test_joint_registration_and_factorial_decision(self):
         driver = {**copy.deepcopy(self.baseline), "id": "driver-candidate", "parent": "baseline",
                   "change_class": "driver", "driver_sha256": "2" * 64, "patch_sha256": "3" * 64,
@@ -386,6 +543,26 @@ class GameWorldControllerTests(unittest.TestCase):
         self.assertTrue(all(job["state"] == "cleaned" for job in self.controller.snapshot()["jobs"]))
         candidate = next(row for row in self.controller.snapshot()["candidates"] if row["id"] == joint["id"])
         self.assertEqual(candidate["state"], "nominated")
+
+        lease = self.controller.issue_private_split_lease(
+            "joint-confirmation", joint["id"], "confirmation", 11, 3600)
+        self.assertEqual(lease["expected_jobs"], 24)
+        self.assertEqual({run["assignment"]["comparison"] for run in lease["schedule"]},
+                         {joint["comparison"]})
+        for index, run in enumerate(lease["schedule"]):
+            candidate = run["candidate"]
+            task_index = int(run["assignment"]["task_id"][:2])
+            success = (candidate == joint["id"]
+                       or candidate == driver["id"] and task_index == 1
+                       or candidate == model["id"] and task_index == 2)
+            job = f"confirmation-{index}"
+            self.controller.admit_job(job, candidate, "evaluation", run["assignment"],
+                                      {}, 600, private_lease=lease["id"])
+            self.complete(job, candidate, run["assignment"], success)
+        confirmation = self.controller.decide_confirmation(lease["id"])
+        self.assertEqual(confirmation["decision"], "confirmation_pass")
+        self.controller.promote_candidate(joint["id"], "gameworld-factorial-confirmation")
+        self.assertEqual(self.controller.snapshot()["controller"]["champion"], joint["id"])
 
 
 if __name__ == "__main__":
