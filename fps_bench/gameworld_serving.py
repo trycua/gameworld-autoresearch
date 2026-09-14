@@ -17,6 +17,7 @@ from fps_bench.gameworld_grpo import (
     validate_policy_core,
     validate_policy_identity,
     verify_grpo_adapter,
+    verify_parent_adapter,
 )
 from fps_bench.modal_scope import check_scope
 from fps_bench.qwen_lora import verify_adapter as verify_sft_adapter
@@ -109,16 +110,19 @@ class ModalServingBackend:
                  "HF_HUB_DISABLE_TELEMETRY": "1", "VLLM_NO_USAGE_STATS": "1", "DO_NOT_TRACK": "1"})
         return await self.inspect(sandbox.object_id)
 
-    async def stage(self, sandbox_id, adapter, manifest):
+    async def stage(self, sandbox_id, adapter, manifest, target):
+        if target not in {"adapter", "parent-adapter"}:
+            raise ValueError("Unsupported serving adapter target")
         import modal
         sandbox = await modal.Sandbox.from_id.aio(sandbox_id)
-        process = await sandbox.exec.aio("mkdir", "-p", "/input/adapter", "/output", timeout=30)
+        destination = "/input/" + target
+        process = await sandbox.exec.aio("mkdir", "-p", destination, "/output", timeout=30)
         if await process.wait.aio() != 0:
             raise RuntimeError("Serving input directories could not be created")
         payloads = {"adapter-manifest.json": (Path(adapter) / "adapter-manifest.json").read_bytes()}
         payloads.update({name: (Path(adapter) / name).read_bytes() for name in manifest["files"]})
         for name, data in payloads.items():
-            await sandbox.filesystem.write_bytes.aio(data, "/input/adapter/" + name)
+            await sandbox.filesystem.write_bytes.aio(data, destination + "/" + name)
         return {name: digest(data) for name, data in payloads.items()}
 
     async def start_server(self, sandbox_id, plan, api_key):
@@ -126,15 +130,20 @@ class ModalServingBackend:
         sandbox = await modal.Sandbox.from_id.aio(sandbox_id)
         command = [
             "vllm", "serve", plan["base_model"], "--revision", plan["base_revision"],
-            "--tokenizer-revision", plan["base_revision"], "--served-model-name", plan["base_served_model"],
+            "--tokenizer-revision", plan["base_revision"], "--served-model-name", plan["raw_base_served_model"],
             "--host", "0.0.0.0", "--port", "8000", "--dtype", "bfloat16",
             "--max-model-len", "8192", "--max-num-seqs", "1", "--gpu-memory-utilization", "0.85",
             "--limit-mm-per-prompt", '{"image":1,"video":0}', "--seed", "42",
             "--generation-config", "vllm", "--enforce-eager",
         ]
+        loras = []
+        if plan["parent_adapter_sha256"] is not None:
+            loras.append(plan["parent_served_model"] + "=/input/parent-adapter")
         if plan["mode"] == "adapter":
-            command.extend(["--enable-lora", "--max-loras", "1", "--max-lora-rank", "8",
-                            "--lora-modules", plan["served_model"] + "=/input/adapter"])
+            loras.append(plan["served_model"] + "=/input/adapter")
+        if loras:
+            command.extend(["--enable-lora", "--max-loras", str(len(loras)), "--max-lora-rank", "8",
+                            "--lora-modules", *loras])
         shell = " ".join(__import__("shlex").quote(value) for value in command)
         process = await sandbox.exec.aio(
             "bash", "-lc", f"nohup {shell} >/output/server.log 2>&1 </dev/null & echo $! >/output/server.pid",
@@ -149,7 +158,8 @@ class ModalServingBackend:
                 try:
                     models = await asyncio.to_thread(
                         authenticated_request, observed["endpoint"], api_key, "/models", None, 10)
-                    if plan["served_model"] in {item.get("id") for item in models.get("data", [])}:
+                    advertised = {item.get("id") for item in models.get("data", [])}
+                    if set(plan["advertised_models"]) <= advertised:
                         return observed
                 except Exception:
                     pass
@@ -170,8 +180,16 @@ class GameWorldServingLifecycle:
         with controller.ledger.transaction() as connection:
             connection.execute("CREATE TABLE IF NOT EXISTS gameworld_serving_launches ("
                                "job_id TEXT PRIMARY KEY REFERENCES jobs(id), plan TEXT NOT NULL, sandbox_id TEXT, "
-                               "adapter_staged INTEGER NOT NULL DEFAULT 0, server_attempted INTEGER NOT NULL DEFAULT 0, "
+                               "adapter_staged INTEGER NOT NULL DEFAULT 0, "
+                               "parent_adapter_staged INTEGER NOT NULL DEFAULT 0, "
+                               "server_attempted INTEGER NOT NULL DEFAULT 0, "
                                "policy_identity TEXT, termination_receipt TEXT)")
+            columns = {row["name"] for row in connection.execute(
+                "PRAGMA table_info(gameworld_serving_launches)")}
+            if "parent_adapter_staged" not in columns:
+                connection.execute(
+                    "ALTER TABLE gameworld_serving_launches ADD COLUMN "
+                    "parent_adapter_staged INTEGER NOT NULL DEFAULT 0")
 
     def stored(self, job_id):
         with self.controller.ledger.transaction() as connection:
@@ -199,15 +217,15 @@ class GameWorldServingLifecycle:
                                (job_id, encoded))
         return plan
 
-    async def prepare_baseline(self, job_id, policy_path, *, workspace, app, environment,
-                               environment_id, image_id, app_id=None,
-                               isolation_policy="restricted-environment"):
+    async def prepare_source(self, job_id, policy_path, adapter=None, *, workspace, app, environment,
+                             environment_id, image_id, app_id=None,
+                             isolation_policy="restricted-environment"):
         if not re.fullmatch(r"im-[A-Za-z0-9]+", image_id) or not re.fullmatch(r"ap-[A-Za-z0-9]+", app_id or ""):
             raise ValueError("Serving requires immutable Modal image and app IDs")
         policy_bytes = Path(policy_path).read_bytes()
         identity = json.loads(policy_bytes)
         if canonical(identity) != policy_bytes:
-            raise ValueError("Baseline policy identity must use canonical encoding")
+            raise ValueError("Source policy identity must use canonical encoding")
         template = self.controller.contract["episode_template"]
         core = validate_policy_core(identity, {"model": {
             "base_model": template["model"], "base_revision": template["revision"]}})
@@ -219,14 +237,17 @@ class GameWorldServingLifecycle:
             candidate = json.loads(self.controller._candidate(connection, job["candidate"])["manifest"])
             if (job["kind"] != "serving"
                     or set(specification["reservations"]) != {"modal_micro_usd"}
-                    or assignment.get("mode") != "baseline"
+                    or assignment.get("mode") != "source"
                     or assignment.get("policy_sha256") != policy_digest(core)
                     or candidate["policy_sha256"] != assignment["policy_sha256"]
-                    or candidate["model"]["adapter_sha256"] is not None
-                    or core["adapter_sha256"] is not None
+                    or candidate["model"]["adapter_sha256"] != assignment["adapter_sha256"]
+                    or core["adapter_sha256"] != assignment["adapter_sha256"]
                     or core["served_model"] != assignment.get("served_model")
                     or core["generation"] != assignment.get("generation")):
-                raise LedgerConflict("Baseline serving differs from the registered base policy")
+                raise LedgerConflict("Source serving differs from the registered candidate policy")
+        parent_adapter = verify_parent_adapter(adapter, core["adapter_sha256"], identity)
+        parent_manifest = (None if parent_adapter is None else
+                           json.loads((parent_adapter / "adapter-manifest.json").read_bytes()))
         scope = {"workspace": workspace, "environment": environment, "environment_id": environment_id,
                  "app": app, "app_id": app_id, "isolation_policy": isolation_policy}
         guard = await check_scope(self.backend, scope)
@@ -235,15 +256,22 @@ class GameWorldServingLifecycle:
         if specification["reservations"]["modal_micro_usd"] < quote["required_reservation_micro_usd"]:
             raise BudgetRefused("Serving job hold does not cover the refreshed Modal quote")
         campaign = self.controller.ledger.snapshot()["campaign"]["id"]
+        raw_base_served_model = (core["served_model"] if parent_adapter is None else
+                                 "base-" + digest(canonical([core["base_model"], core["base_revision"]]))[:24])
         launch = {**scope, "image_id": image_id, "name": "gw-serve-" + digest(canonical([campaign, job_id]))[:20],
-                  "seconds": specification["timeout_seconds"], "mode": "baseline", "policy": core,
+                  "seconds": specification["timeout_seconds"], "mode": "source", "policy": core,
                   "served_model": core["served_model"], "base_model": core["base_model"],
-                  "base_revision": core["base_revision"], "base_served_model": core["served_model"],
+                  "base_revision": core["base_revision"], "raw_base_served_model": raw_base_served_model,
+                  "parent_policy": core, "parent_served_model": core["served_model"],
+                  "parent_adapter_sha256": core["adapter_sha256"],
+                  "parent_adapter_root": None if parent_adapter is None else str(parent_adapter.resolve()),
+                  "parent_adapter_files": {} if parent_manifest is None else parent_manifest["files"],
+                  "advertised_models": [core["served_model"]],
                   "adapter_manifest_sha256": None, "adapter_files": {}}
         tags = {"campaign": campaign, "job": job_id, "identity": digest(canonical(launch))}
         return self.save_plan(job_id, {**launch, "tags": tags, "quote": quote, "scope_guard": guard})
 
-    async def prepare(self, job_id, training_output, *, workspace, app, environment,
+    async def prepare(self, job_id, training_output, parent_adapter=None, *, workspace, app, environment,
                       environment_id, image_id, app_id=None, isolation_policy="restricted-environment"):
         if not re.fullmatch(r"im-[A-Za-z0-9]+", image_id) or not re.fullmatch(r"ap-[A-Za-z0-9]+", app_id or ""):
             raise ValueError("Serving requires immutable Modal image and app IDs")
@@ -260,9 +288,22 @@ class GameWorldServingLifecycle:
             if (job["kind"] != "serving" or set(specification["reservations"]) != {"modal_micro_usd"}
                     or training_result["artifact_sha256"] != digest(canonical(bundle))
                     or bundle.get("output") != str(training_output)
-                    or bundle.get("adapter_manifest_sha256") != assignment["adapter_sha256"]):
+                    or bundle.get("adapter_manifest_sha256") != assignment["adapter_sha256"]
+                    or assignment["parent_policy_sha256"] != parent["policy_sha256"]
+                    or assignment["parent_adapter_sha256"] != parent["model"]["adapter_sha256"]
+                    or assignment["parent_served_model"] != parent["model"]["served_model"]):
                 raise LedgerConflict("Serving input differs from the completed training job")
         policy_identity = json.loads((training_output / "policy.json").read_bytes())
+        parent_policy = validate_policy_core(policy_identity, {"model": {
+            "base_model": parent["model"]["base_model"], "base_revision": parent["model"]["base_revision"]}})
+        if (policy_digest(parent_policy) != parent["policy_sha256"]
+                or parent_policy["adapter_sha256"] != assignment["parent_adapter_sha256"]
+                or parent_policy["served_model"] != assignment["parent_served_model"]):
+            raise LedgerConflict("Child training policy differs from its registered parent")
+        parent_adapter = verify_parent_adapter(
+            parent_adapter, assignment["parent_adapter_sha256"], policy_identity)
+        parent_manifest = (None if parent_adapter is None else
+                           json.loads((parent_adapter / "adapter-manifest.json").read_bytes()))
         adapter_data = (training_output / "adapter/adapter-manifest.json").read_bytes()
         adapter_identity = json.loads(adapter_data)
         if adapter_identity.get("objective") == "grpo":
@@ -290,6 +331,9 @@ class GameWorldServingLifecycle:
                   "served_model": assignment["served_model"], "generation": assignment["generation"]}
         validate_policy_core(policy, {"model": {
             "base_model": parent["model"]["base_model"], "base_revision": parent["model"]["base_revision"]}})
+        raw_base_served_model = (parent_policy["served_model"] if parent_adapter is None else
+                                 "base-" + digest(canonical([
+                                     parent["model"]["base_model"], parent["model"]["base_revision"]]))[:24])
         identity = {**scope, "image_id": image_id, "name": "gw-serve-" + digest(canonical([campaign, job_id]))[:20],
                     "mode": "adapter", "policy": policy,
                     "seconds": specification["timeout_seconds"], "training_output": str(training_output),
@@ -299,10 +343,16 @@ class GameWorldServingLifecycle:
                     "adapter_manifest_sha256": assignment["adapter_sha256"],
                     "served_model": assignment["served_model"], "generation": assignment["generation"],
                     "base_model": parent["model"]["base_model"], "base_revision": parent["model"]["base_revision"],
-                    "base_served_model": parent["model"]["served_model"]}
+                    "raw_base_served_model": raw_base_served_model,
+                    "parent_policy": parent_policy,
+                    "parent_served_model": assignment["parent_served_model"],
+                    "parent_adapter_sha256": assignment["parent_adapter_sha256"],
+                    "parent_adapter_root": None if parent_adapter is None else str(parent_adapter.resolve()),
+                    "advertised_models": [assignment["parent_served_model"], assignment["served_model"]]}
         tags = {"campaign": campaign, "job": job_id, "identity": digest(canonical(identity))}
         plan = {**identity, "tags": tags, "quote": quote, "scope_guard": guard,
-                "adapter_files": adapter_manifest["files"]}
+                "adapter_files": adapter_manifest["files"],
+                "parent_adapter_files": {} if parent_manifest is None else parent_manifest["files"]}
         return self.save_plan(job_id, plan)
 
     def acknowledge(self, job_id, observed):
@@ -340,11 +390,24 @@ class GameWorldServingLifecycle:
             raise LedgerConflict("Ambiguous serving submission; never recreate automatically")
         self.acknowledge(job_id, observed)
         job, launch, plan = self.stored(job_id)
+        if plan["parent_adapter_sha256"] is not None and not launch["parent_adapter_staged"]:
+            parent_adapter = Path(plan["parent_adapter_root"])
+            parent_manifest = json.loads((parent_adapter / "adapter-manifest.json").read_bytes())
+            staged = await self.backend.stage(
+                launch["sandbox_id"], parent_adapter, parent_manifest, "parent-adapter")
+            expected = {"adapter-manifest.json": plan["parent_adapter_sha256"],
+                        **plan["parent_adapter_files"]}
+            if staged != expected:
+                raise ValueError("Parent serving adapter staging receipt differs from admission")
+            with self.controller.ledger.transaction() as connection:
+                connection.execute(
+                    "UPDATE gameworld_serving_launches SET parent_adapter_staged=1 WHERE job_id=?",
+                    (job_id,))
         if plan["mode"] == "adapter":
             adapter = Path(plan["training_output"]) / "adapter"
             manifest = json.loads((adapter / "adapter-manifest.json").read_bytes())
             if not launch["adapter_staged"]:
-                staged = await self.backend.stage(launch["sandbox_id"], adapter, manifest)
+                staged = await self.backend.stage(launch["sandbox_id"], adapter, manifest, "adapter")
                 expected = {"adapter-manifest.json": plan["adapter_manifest_sha256"], **plan["adapter_files"]}
                 if staged != expected:
                     raise ValueError("Serving adapter staging receipt differs from admission")
@@ -362,8 +425,9 @@ class GameWorldServingLifecycle:
         if not observed.get("endpoint") or observed.get("returncode") is not None:
             raise LedgerConflict("Attempted serving sandbox is not a live endpoint")
         models = await asyncio.to_thread(authenticated_request, observed["endpoint"], api_key, "/models")
-        if plan["served_model"] not in {item.get("id") for item in models.get("data", [])}:
-            raise ValueError("Candidate adapter is not advertised by the serving endpoint")
+        advertised = {item.get("id") for item in models.get("data", [])}
+        if not set(plan["advertised_models"]) <= advertised:
+            raise ValueError("Required policy models are not advertised by the serving endpoint")
         policy_identity = {**policy_core(plan["policy"]),
                            "deployment": {"app_id": plan["app_id"], "sandbox_id": launch["sandbox_id"],
                                           "image_id": plan["image_id"],
@@ -387,25 +451,24 @@ class GameWorldServingLifecycle:
         else:
             root.mkdir()
             exclusive_write(root / "policy.json", canonical(policy_identity), 0o400)
-        base_policy_identity = None
+        parent_policy_identity = None
         if plan["mode"] == "adapter":
-            base_policy_identity = {
-                "base_model": plan["base_model"], "base_revision": plan["base_revision"],
-                "adapter_sha256": None, "served_model": plan["base_served_model"],
-                "deployment": policy_identity["deployment"], "generation": plan["generation"],
-            }
-            validate_policy_identity(base_policy_identity, {
+            parent_policy_identity = {**policy_core(plan["parent_policy"]),
+                                      "deployment": policy_identity["deployment"]}
+            validate_policy_identity(parent_policy_identity, {
                 "model": {"base_model": plan["base_model"], "base_revision": plan["base_revision"],
                           "minimum_grpo_group_size": 2, "maximum_grpo_group_size": 8}})
-            base_path = root / "base-policy.json"
-            if base_path.exists():
-                if base_path.read_bytes() != canonical(base_policy_identity):
-                    raise LedgerConflict("Local base serving identity changed")
+            parent_path = root / "parent-policy.json"
+            if parent_path.exists():
+                if parent_path.read_bytes() != canonical(parent_policy_identity):
+                    raise LedgerConflict("Local parent serving identity changed")
             else:
-                exclusive_write(base_path, canonical(base_policy_identity), 0o400)
+                exclusive_write(parent_path, canonical(parent_policy_identity), 0o400)
         result = {"status": "complete", "candidate_id": (
-                      job["candidate"] if plan["mode"] == "baseline" else plan["served_model"]),
-                  "adapter_manifest_sha256": plan["adapter_manifest_sha256"],
+                      job["candidate"] if plan["mode"] == "source" else plan["served_model"]),
+                  "adapter_manifest_sha256": (plan["parent_adapter_sha256"]
+                                                if plan["mode"] == "source"
+                                                else plan["adapter_manifest_sha256"]),
                   "policy_sha256": policy_digest(policy_identity),
                   "deployment": policy_identity["deployment"]}
         receipt = {"job_id": job_id, "sandbox_id": launch["sandbox_id"], "result": result}
@@ -429,7 +492,8 @@ class GameWorldServingLifecycle:
             self.controller.register_candidate(candidate)
         return {"endpoint": observed["endpoint"], "policy_identity": policy_identity, "candidate": candidate,
                 "policy_path": str(root / "policy.json"),
-                "base_policy_path": None if base_policy_identity is None else str(root / "base-policy.json")}
+                "parent_policy_path": (None if parent_policy_identity is None
+                                       else str(root / "parent-policy.json"))}
 
     async def terminate(self, job_id):
         job, launch, plan = self.stored(job_id)

@@ -102,7 +102,7 @@ class ServingLifecycle:
         self.backend = self
         self.launches = {}
 
-    async def prepare_baseline(self, job_id, policy_path, **config):
+    async def prepare_source(self, job_id, policy_path, adapter=None, **config):
         identity = json.loads(Path(policy_path).read_bytes())
         plan = {"policy": {key: identity[key] for key in (
                     "base_model", "base_revision", "adapter_sha256", "served_model", "generation")},
@@ -113,7 +113,7 @@ class ServingLifecycle:
         self.launches.setdefault(job_id, {"plan": plan, "sandbox_id": None, "returncode": None})
         return plan
 
-    async def prepare(self, job_id, output, **config):
+    async def prepare(self, job_id, output, parent_adapter=None, **config):
         raise AssertionError("Driver runner check must not prepare adapter serving")
 
     async def start(self, job_id, api_key):
@@ -136,7 +136,7 @@ class ServingLifecycle:
                       "deployment": deployment}
             self.controller.record_result(job_id, result, digest(canonical(result)))
         return {"endpoint": "https://managed.example/v1", "policy_identity": identity,
-                "candidate": None, "policy_path": str(root / "policy.json"), "base_policy_path": None}
+                "candidate": None, "policy_path": str(root / "policy.json"), "parent_policy_path": None}
 
     def stored(self, job_id):
         with self.controller.ledger.transaction() as connection:
@@ -195,7 +195,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(first["dispatch"][0]["kind"], "driver_build")
         self.assertEqual(self.fleet.driver_attempts, 1)
         self.assertEqual(self.coordinator.workflow(self.proposal["id"])["state"],
-                         "starting_baseline_serving")
+                         "starting_source_serving")
         second = self.run_async(self.runner.run_once(2))
         self.assertEqual(second["dispatch"][0]["kind"], "serving")
         self.assertEqual(self.coordinator.workflow(self.proposal["id"])["state"], "evaluating")

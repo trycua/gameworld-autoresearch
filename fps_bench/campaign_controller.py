@@ -248,21 +248,29 @@ class CampaignController:
                     and type(generation["top_p"]) in (int, float) and 0 < generation["top_p"] <= 1
                     and type(generation["max_tokens"]) is int and 1 <= generation["max_tokens"] <= 512
                     and generation["response_format"] == "unconstrained-json-text")
-            baseline_serving = (task_contract
-                    and set(assignment) == {"mode", "policy_sha256", "served_model", "generation"}
-                    and assignment.get("mode") == "baseline"
-                    and SHA256.fullmatch(assignment.get("policy_sha256", "")))
+            source_serving = (task_contract
+                    and set(assignment) == {
+                        "mode", "policy_sha256", "adapter_sha256", "served_model", "generation"}
+                    and assignment.get("mode") == "source"
+                    and SHA256.fullmatch(assignment.get("policy_sha256", ""))
+                    and (assignment.get("adapter_sha256") is None
+                         or SHA256.fullmatch(assignment["adapter_sha256"])))
             adapter_serving = (task_contract
                     and set(assignment) == {"training_job", "adapter_sha256", "served_model", "hypothesis",
-                                           "comparison", "generation"}
+                                           "comparison", "generation", "parent_policy_sha256",
+                                           "parent_adapter_sha256", "parent_served_model"}
                     and IDENTIFIER.fullmatch(assignment.get("training_job", ""))
                     and SHA256.fullmatch(assignment.get("adapter_sha256", ""))
+                    and SHA256.fullmatch(assignment.get("parent_policy_sha256", ""))
+                    and (assignment.get("parent_adapter_sha256") is None
+                         or SHA256.fullmatch(assignment["parent_adapter_sha256"]))
+                    and IDENTIFIER.fullmatch(assignment.get("parent_served_model", ""))
                     and isinstance(assignment.get("hypothesis"), str)
                     and assignment["hypothesis"].strip() and len(assignment["hypothesis"]) <= 4000
                     and IDENTIFIER.fullmatch(assignment.get("comparison", "")))
             if (not isinstance(assignment.get("served_model"), str)
                     or not IDENTIFIER.fullmatch(assignment["served_model"])
-                    or not valid_generation or not (baseline_serving or adapter_serving)):
+                    or not valid_generation or not (source_serving or adapter_serving)):
                 raise ValueError("GameWorld serving requires an immutable adapter and rollout policy")
         if kind == "rollout":
             required = {"split", "task_id", "game", "task", "seed", "repeat", "group_id", "members",
@@ -358,17 +366,20 @@ class CampaignController:
                         or assignment["policy_sha256"] != candidate_manifest.get("policy_sha256")):
                     raise ValueError("GameWorld data generation identity differs from its source candidate")
             if kind == "serving":
-                if assignment.get("mode") == "baseline":
-                    if (candidate_manifest["model"]["adapter_sha256"] is not None
-                            or assignment["policy_sha256"] != candidate_manifest.get("policy_sha256")
+                if assignment.get("mode") == "source":
+                    if (assignment["policy_sha256"] != candidate_manifest.get("policy_sha256")
+                            or assignment["adapter_sha256"] != candidate_manifest["model"]["adapter_sha256"]
                             or assignment["served_model"] != candidate_manifest["model"]["served_model"]):
-                        raise LedgerConflict("Baseline serving differs from the registered base policy")
+                        raise LedgerConflict("Source serving differs from the registered candidate policy")
                 else:
                     training = self._job(connection, assignment["training_job"])
                     if (training["kind"] != "training" or training["candidate"] != candidate
                             or training["state"] not in ("billing_pending", "cleaned") or not training["result"]
                             or json.loads(training["result"])["result"].get("adapter_manifest_sha256")
-                            != assignment["adapter_sha256"]):
+                            != assignment["adapter_sha256"]
+                            or assignment["parent_policy_sha256"] != candidate_manifest.get("policy_sha256")
+                            or assignment["parent_adapter_sha256"] != candidate_manifest["model"]["adapter_sha256"]
+                            or assignment["parent_served_model"] != candidate_manifest["model"]["served_model"]):
                         raise LedgerConflict("Serving requires a completed, provider-cleaned training job from this parent")
             group = JOB_GROUPS[kind]
             placeholders = ",".join("?" for _ in ACTIVE_PROVIDER_STATES)

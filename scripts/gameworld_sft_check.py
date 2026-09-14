@@ -140,7 +140,7 @@ class GameWorldSFTTests(unittest.TestCase):
         self.assertEqual(plan["objective"], "sft")
         served_model = self.coordinator._items(self.proposal["id"], "serving")[0]["assignment"]["served_model"]
         with patch("fps_bench.gameworld_serving.authenticated_request",
-                   return_value={"data": [{"id": served_model}]}):
+                   return_value={"data": [{"id": plan["parent_served_model"]}, {"id": served_model}]}):
             started = self.run_async(serving.start(serving_job, "x" * 32))
         self.assertEqual(started["candidate"]["model"]["adapter_sha256"], receipt["adapter_manifest_sha256"])
         self.coordinator.advance()

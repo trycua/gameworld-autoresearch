@@ -4,12 +4,14 @@ import asyncio
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import sys
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fps_bench.evaluation_contract import canonical, digest
 from fps_bench.gameworld_grpo import policy_digest
-from fps_bench.gameworld_serving import GameWorldServingLifecycle, compute_reservation
+from fps_bench.gameworld_serving import GameWorldServingLifecycle, ModalServingBackend, compute_reservation
 import scripts.gameworld_coordinator_check as coordinator_fixtures
 from scripts.gameworld_modal_check import GameWorldModalTests
 
@@ -19,6 +21,7 @@ class Backend:
         self.sandbox = None
         self.starts = 0
         self.stages = 0
+        self.stage_targets = []
 
     async def app_scope(self, workspace, environment, app):
         return {"workspace": workspace, "environment": environment, "environment_id": "en-test",
@@ -46,8 +49,9 @@ class Backend:
                         "endpoint": "https://candidate.example/v1"}
         return self.sandbox.copy()
 
-    async def stage(self, sandbox_id, adapter, manifest):
+    async def stage(self, sandbox_id, adapter, manifest, target):
         self.stages += 1
+        self.stage_targets.append(target)
         return {"adapter-manifest.json": digest((Path(adapter) / "adapter-manifest.json").read_bytes()),
                 **{name: digest((Path(adapter) / name).read_bytes()) for name in manifest["files"]}}
 
@@ -71,9 +75,14 @@ class ServingTests(unittest.TestCase):
         self.training.run_async(self.training.artifacts.export("training-one", self.output))
         self.training.run_async(self.training.lifecycle.terminate("training-one"))
         adapter = json.loads((self.output / "bundle.json").read_bytes())["adapter_manifest_sha256"]
+        with self.training.controller.ledger.transaction() as connection:
+            baseline = json.loads(self.training.controller._candidate(connection, "baseline")["manifest"])
         assignment = {"training_job": "training-one", "adapter_sha256": adapter,
                       "served_model": "model-candidate", "hypothesis": "Grouped rewards improve action choice.",
                       "comparison": "model-proposal-one",
+                      "parent_policy_sha256": baseline["policy_sha256"],
+                      "parent_adapter_sha256": baseline["model"]["adapter_sha256"],
+                      "parent_served_model": baseline["model"]["served_model"],
                       "generation": {"temperature": 0.8, "top_p": 0.95, "max_tokens": 128,
                                      "response_format": "unconstrained-json-text"}}
         self.training.controller.admit_job("serving-one", "baseline", "serving", assignment,
@@ -90,7 +99,7 @@ class ServingTests(unittest.TestCase):
 
     def test_candidate_endpoint_is_immutable_and_cleanup_retains_billing(self):
         with patch("fps_bench.gameworld_serving.authenticated_request",
-                   return_value={"data": [{"id": "model-candidate"}]}):
+                   return_value={"data": [{"id": "qwen-baseline"}, {"id": "model-candidate"}]}):
             first = self.run_async(self.lifecycle.start("serving-one", "x" * 32))
             second = self.run_async(self.lifecycle.start("serving-one", "x" * 32))
         self.assertEqual(first["policy_identity"], second["policy_identity"])
@@ -99,11 +108,11 @@ class ServingTests(unittest.TestCase):
                          if row["id"] == "model-candidate")
         self.assertEqual(candidate["state"], "materialized")
         self.assertEqual(first["policy_identity"]["deployment"]["sandbox_id"], "sb-serving")
-        base_policy = json.loads(Path(first["base_policy_path"]).read_bytes())
+        parent_policy = json.loads(Path(first["parent_policy_path"]).read_bytes())
         with self.training.controller.ledger.transaction() as connection:
             baseline = json.loads(self.training.controller._candidate(connection, "baseline")["manifest"])
-        self.assertEqual(policy_digest(base_policy), baseline["policy_sha256"])
-        self.assertEqual(base_policy["deployment"], first["policy_identity"]["deployment"])
+        self.assertEqual(policy_digest(parent_policy), baseline["policy_sha256"])
+        self.assertEqual(parent_policy["deployment"], first["policy_identity"]["deployment"])
         self.run_async(self.lifecycle.terminate("serving-one"))
         job = next(row for row in self.training.controller.snapshot()["jobs"] if row["id"] == "serving-one")
         self.assertEqual(job["state"], "billing_pending")
@@ -125,7 +134,8 @@ class BaselineServingTests(unittest.TestCase):
         self.controller = self.fixture.coordinator.controller
         baseline = self.fixture.coordinator._candidate("baseline")
         identity = json.loads(self.fixture.policy_path.read_bytes())
-        assignment = {"mode": "baseline", "policy_sha256": baseline["policy_sha256"],
+        assignment = {"mode": "source", "policy_sha256": baseline["policy_sha256"],
+                      "adapter_sha256": None,
                       "served_model": baseline["model"]["served_model"],
                       "generation": identity["generation"]}
         self.controller.admit_job("baseline-serving", "baseline", "serving", assignment,
@@ -133,7 +143,7 @@ class BaselineServingTests(unittest.TestCase):
         self.backend = Backend()
         self.lifecycle = GameWorldServingLifecycle(
             self.controller, self.fixture.root / "baseline-serving", self.backend)
-        self.run_async(self.lifecycle.prepare_baseline(
+        self.run_async(self.lifecycle.prepare_source(
             "baseline-serving", self.fixture.policy_path, workspace="test", app="test-app",
             environment="gameworld-test", environment_id="en-test", image_id="im-serving", app_id="ap-test"))
 
@@ -154,6 +164,76 @@ class BaselineServingTests(unittest.TestCase):
         job = next(row for row in self.controller.snapshot()["jobs"] if row["id"] == "baseline-serving")
         self.assertEqual(job["state"], "billing_pending")
         self.controller.settle_job("baseline-serving", {"modal_micro_usd": 1000}, "baseline-serving-bill")
+
+    def test_adapted_source_policy_stages_its_parent_adapter(self):
+        self.controller.cancel_undispatched("baseline-serving")
+        baseline = self.fixture.coordinator._candidate("baseline")
+        adapter = self.fixture.root / "adapted-source"
+        adapter.mkdir()
+        config, weights = b"{}", b"parent-weights"
+        (adapter / "adapter_config.json").write_bytes(config)
+        (adapter / "adapter_model.safetensors").write_bytes(weights)
+        manifest = {"schema_version": 1, "objective": "grpo",
+                    "base_model": self.fixture.identity["base_model"],
+                    "base_revision": self.fixture.identity["base_revision"],
+                    "files": {"adapter_config.json": digest(config),
+                              "adapter_model.safetensors": digest(weights)}}
+        adapter_sha256 = digest(canonical(manifest))
+        (adapter / "adapter-manifest.json").write_bytes(canonical(manifest))
+        identity = {**self.fixture.identity, "adapter_sha256": adapter_sha256,
+                    "served_model": "adapted-parent"}
+        identity_path = self.fixture.root / "adapted-source-policy.json"
+        identity_path.write_bytes(canonical(identity))
+        candidate = {**json.loads(json.dumps(baseline)), "id": "adapted-parent", "parent": "baseline",
+                     "change_class": "model", "hypothesis": "adapted source fixture",
+                     "comparison": "adapted-source-comparison", "policy_sha256": policy_digest(identity)}
+        candidate["model"]["adapter_sha256"] = adapter_sha256
+        candidate["model"]["served_model"] = candidate["id"]
+        self.controller.register_candidate(candidate)
+        with self.controller.ledger.transaction() as connection:
+            connection.execute("UPDATE candidates SET state='retired' WHERE id='baseline'")
+            connection.execute("UPDATE candidates SET state='champion' WHERE id=?", (candidate["id"],))
+            connection.execute("UPDATE controller SET champion=?", (candidate["id"],))
+        assignment = {"mode": "source", "policy_sha256": candidate["policy_sha256"],
+                      "adapter_sha256": adapter_sha256, "served_model": candidate["id"],
+                      "generation": identity["generation"]}
+        self.controller.admit_job("adapted-source-serving", candidate["id"], "serving", assignment,
+                                  {"modal_micro_usd": 10_000_000}, 600)
+        backend = Backend()
+        lifecycle = GameWorldServingLifecycle(
+            self.controller, self.fixture.root / "adapted-source-serving", backend)
+        self.run_async(lifecycle.prepare_source(
+            "adapted-source-serving", identity_path, adapter, workspace="test", app="test-app",
+            environment="gameworld-test", environment_id="en-test", image_id="im-serving", app_id="ap-test"))
+        with patch("fps_bench.gameworld_serving.authenticated_request",
+                   return_value={"data": [{"id": candidate["id"]}]}):
+            result = self.run_async(lifecycle.start("adapted-source-serving", "x" * 32))
+        self.assertEqual(backend.stage_targets, ["parent-adapter"])
+        self.assertEqual(result["policy_identity"]["adapter_sha256"], adapter_sha256)
+        self.assertIsNone(result["parent_policy_path"])
+
+
+class ModalServerCommandTests(unittest.TestCase):
+    def test_dual_lora_server_advertises_parent_and_child(self):
+        process = SimpleNamespace(wait=SimpleNamespace(aio=AsyncMock(return_value=0)))
+        sandbox = SimpleNamespace(exec=SimpleNamespace(aio=AsyncMock(return_value=process)))
+        modal = SimpleNamespace(Sandbox=SimpleNamespace(
+            from_id=SimpleNamespace(aio=AsyncMock(return_value=sandbox))))
+        backend = ModalServingBackend()
+        backend.inspect = AsyncMock(return_value={"id": "sb-test", "tags": {}, "returncode": None,
+                                                   "endpoint": "https://candidate.example/v1"})
+        plan = {"base_model": "Qwen/Qwen3-VL-2B-Instruct", "base_revision": "a" * 40,
+                "raw_base_served_model": "base-qwen", "parent_adapter_sha256": "b" * 64,
+                "parent_served_model": "model-parent", "mode": "adapter",
+                "served_model": "model-child", "advertised_models": ["model-parent", "model-child"]}
+        models = {"data": [{"id": "model-parent"}, {"id": "model-child"}]}
+        with patch.dict(sys.modules, {"modal": modal}), patch(
+                "fps_bench.gameworld_serving.authenticated_request", return_value=models):
+            asyncio.run(backend.start_server("sb-test", plan, "x" * 32))
+        shell = sandbox.exec.aio.await_args.args[2]
+        self.assertIn("--max-loras 2", shell)
+        self.assertIn("model-parent=/input/parent-adapter", shell)
+        self.assertIn("model-child=/input/adapter", shell)
 
 
 if __name__ == "__main__":

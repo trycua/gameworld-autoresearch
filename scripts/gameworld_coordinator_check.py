@@ -92,18 +92,18 @@ class CoordinatorTests(unittest.TestCase):
 
     def start_baseline_serving(self, proposal_id):
         workflow = self.coordinator.workflow(proposal_id)
-        item = self.coordinator._items(proposal_id, workflow["details"]["baseline_serving_phase"])[0]
+        item = self.coordinator._items(proposal_id, workflow["details"]["source_serving_phase"])[0]
         admitted = self.coordinator.admit_ready(1)[0]["job_id"]
         self.assertEqual(admitted, item["job_id"])
         self.finish_job(admitted, {"status": "complete", "candidate_id": item["candidate"],
-                                   "adapter_manifest_sha256": None,
+                                   "adapter_manifest_sha256": item["assignment"]["adapter_sha256"],
                                    "policy_sha256": item["assignment"]["policy_sha256"]}, cleanup=False)
         return self.coordinator.advance()
 
     def stop_baseline_serving(self, proposal_id):
         workflow = self.coordinator.workflow(proposal_id)
         job_id = self.coordinator._items(
-            proposal_id, workflow["details"]["baseline_serving_phase"])[0]["job_id"]
+            proposal_id, workflow["details"]["source_serving_phase"])[0]["job_id"]
         self.coordinator.controller.provider_cleanup_confirmed(job_id, "cleanup:" + job_id)
         self.coordinator.controller.settle_job(
             job_id, {"modal_micro_usd": 0}, "billing:" + job_id)
@@ -127,7 +127,7 @@ class CoordinatorTests(unittest.TestCase):
         self.finish_job(build, {"status": "complete", "candidate_id": candidate["id"],
                                 "driver_sha256": candidate["driver_sha256"]})
         self.assertEqual(self.coordinator.advance(), [{
-            "workflow": proposal["id"], "state": "starting_baseline_serving"}])
+            "workflow": proposal["id"], "state": "starting_source_serving"}])
         self.assertEqual(self.start_baseline_serving(proposal["id"]), [{
             "workflow": proposal["id"], "state": "evaluating"}])
         items = self.coordinator._items(proposal["id"], "development")
@@ -155,7 +155,7 @@ class CoordinatorTests(unittest.TestCase):
         proposal = self.fixture.model_proposal()
         self.coordinator.register(proposal)
         self.coordinator.start_next("model-action")
-        self.assertEqual(len(self.coordinator._items(proposal["id"], "baseline-serving-rollout")), 1)
+        self.assertEqual(len(self.coordinator._items(proposal["id"], "source-serving-rollout")), 1)
         self.start_baseline_serving(proposal["id"])
         self.assertEqual(len(self.coordinator._items(proposal["id"], "rollout")), 1)
         self.assertEqual(self.coordinator.workflow(proposal["id"])["details"]["modal_allocation"], {
@@ -172,7 +172,7 @@ class CoordinatorTests(unittest.TestCase):
                                   "dataset_sha256": "8" * 64})
         self.coordinator.advance()
         self.assertEqual(self.coordinator.workflow(proposal["id"])["state"],
-                         "awaiting_baseline_serving_stop")
+                         "awaiting_source_serving_stop")
         self.stop_baseline_serving(proposal["id"])
         self.assertEqual(self.coordinator.workflow(proposal["id"])["state"], "awaiting_dataset")
         self.coordinator.prepare_training_dataset("model-action")
@@ -201,6 +201,28 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual({item["candidate"] for item in items}, {"baseline", served_model})
         self.assertEqual(self.coordinator.controller.snapshot()["budget"]["resources"]["modal_micro_usd"]["committed"],
                          15_000_000)
+
+    def test_next_model_generation_serves_the_adapted_champion(self):
+        baseline = self.coordinator._candidate("baseline")
+        parent = {**copy.deepcopy(baseline), "id": "model-parent", "parent": "baseline",
+                  "change_class": "model", "hypothesis": "first model generation",
+                  "comparison": "model-parent-comparison", "policy_sha256": "6" * 64}
+        parent["model"]["adapter_sha256"] = "7" * 64
+        parent["model"]["served_model"] = parent["id"]
+        self.coordinator.controller.register_candidate(parent)
+        with self.coordinator.controller.ledger.transaction() as connection:
+            connection.execute("UPDATE candidates SET state='retired' WHERE id='baseline'")
+            connection.execute("UPDATE candidates SET state='champion' WHERE id=?", (parent["id"],))
+            connection.execute("UPDATE controller SET champion=?", (parent["id"],))
+        proposal = self.fixture.model_proposal("model-second-generation")
+        self.coordinator.register(proposal)
+        self.coordinator.start_next("model-second-action")
+        source = self.coordinator._items(proposal["id"], "source-serving-rollout")
+        self.assertEqual(len(source), 1)
+        self.assertEqual(source[0]["candidate"], parent["id"])
+        self.assertEqual(source[0]["assignment"]["adapter_sha256"], parent["model"]["adapter_sha256"])
+        self.assertEqual(source[0]["assignment"]["policy_sha256"], parent["policy_sha256"])
+        self.assertEqual(source[0]["assignment"]["served_model"], parent["model"]["served_model"])
 
     def test_sft_attaches_authenticated_dataset_without_invalid_grpo_rollout(self):
         proposal = self.fixture.model_proposal("model-sft")
@@ -263,7 +285,7 @@ class CoordinatorTests(unittest.TestCase):
                                   "status": "failed", "error_type": "WorkerError"})
         self.coordinator.advance()
         self.assertEqual(self.coordinator.workflow(proposal["id"])["state"],
-                         "awaiting_baseline_serving_stop")
+                         "awaiting_source_serving_stop")
         self.stop_baseline_serving(proposal["id"])
         self.assertEqual(self.coordinator.workflow(proposal["id"])["state"], "rejected")
         self.assertEqual(self.coordinator._items(proposal["id"], "training"), [])
@@ -319,7 +341,7 @@ class CoordinatorTests(unittest.TestCase):
             )
         workflow = self.coordinator.start_confirmation(
             "confirmed-driver-action", "confirmed-driver-lease", 31)
-        self.assertEqual(workflow["state"], "starting_baseline_serving")
+        self.assertEqual(workflow["state"], "starting_source_serving")
         self.start_baseline_serving(workflow["proposal_id"])
         workflow = self.coordinator.workflow(workflow["proposal_id"])
         self.assertEqual(workflow["state"], "confirming")
@@ -342,7 +364,7 @@ class CoordinatorTests(unittest.TestCase):
             self.coordinator.sync()
         self.coordinator.advance("confirmed-driver-action")
         workflow = self.coordinator.workflow("confirmed-driver-action")
-        self.assertEqual(workflow["state"], "awaiting_baseline_serving_stop")
+        self.assertEqual(workflow["state"], "awaiting_source_serving_stop")
         self.stop_baseline_serving(workflow["proposal_id"])
         workflow = self.coordinator.workflow("confirmed-driver-action")
         self.assertEqual(workflow["state"], "complete")
@@ -351,7 +373,7 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(self.coordinator.controller.snapshot()["controller"]["champion"], candidate["id"])
 
         sealed = self.coordinator.start_sealed("sealed-final", 37)
-        self.assertEqual(sealed["state"], "starting_baseline_serving")
+        self.assertEqual(sealed["state"], "starting_source_serving")
         self.start_baseline_serving(sealed["proposal_id"])
         sealed = self.coordinator.workflow(sealed["proposal_id"])
         self.assertEqual(sealed["state"], "sealed_evaluating")
@@ -370,7 +392,7 @@ class CoordinatorTests(unittest.TestCase):
             self.coordinator.sync()
         self.coordinator.advance(sealed["proposal_id"])
         sealed = self.coordinator.workflow(sealed["proposal_id"])
-        self.assertEqual(sealed["state"], "awaiting_baseline_serving_stop")
+        self.assertEqual(sealed["state"], "awaiting_source_serving_stop")
         self.stop_baseline_serving(sealed["proposal_id"])
         sealed = self.coordinator.workflow(sealed["proposal_id"])
         self.assertEqual(sealed["state"], "complete")

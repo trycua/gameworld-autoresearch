@@ -146,7 +146,7 @@ class WatchdogTests(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         with patch("fps_bench.gameworld_serving.authenticated_request",
-                   return_value={"data": [{"id": "model-candidate"}]}):
+                   return_value={"data": [{"id": "qwen-baseline"}, {"id": "model-candidate"}]}):
             self.run_async(fixture.lifecycle.start("serving-one", "x" * 32))
         fixture.training.controller.stop("watchdog serving test")
         watchdog = CampaignWatchdog(

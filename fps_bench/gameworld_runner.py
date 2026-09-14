@@ -61,6 +61,8 @@ class GameWorldProviderRunner:
         candidate = self._candidate(candidate_id)
         if candidate["change_class"] == "joint":
             return self._model_workflow(candidate["components"]["model"])
+        if candidate["change_class"] == "driver" and candidate["model"]["adapter_sha256"] is not None:
+            return self._model_workflow(candidate["parent"])
         if candidate["change_class"] == "model":
             with self.controller.ledger.transaction() as connection:
                 row = connection.execute(
@@ -77,8 +79,8 @@ class GameWorldProviderRunner:
         details = workflow["details"]
         if "serving_job" in details:
             return details["serving_job"]
-        if "baseline_serving_job" in details:
-            return details["baseline_serving_job"]
+        if "source_serving_job" in details:
+            return details["source_serving_job"]
         owner = details.get("serving_owner")
         if owner is not None:
             return self.serving_job(owner)
@@ -87,14 +89,30 @@ class GameWorldProviderRunner:
     def policy_path(self, candidate_id, workflow_id):
         candidate = self._candidate(candidate_id)
         serving_job = self.serving_job(workflow_id)
-        adapter = candidate["model"]["adapter_sha256"] is not None
-        name = "policy.json" if adapter else "base-policy.json"
-        path = self.coordinator.state_root / "serving" / serving_job / name
-        if name == "base-policy.json" and not path.is_file():
-            path = self.coordinator.state_root / "serving" / serving_job / "policy.json"
-        data = path.read_bytes()
-        if policy_digest(json.loads(data)) != candidate["policy_sha256"]:
-            raise LedgerConflict("Candidate policy bytes differ from the controller manifest")
+        root = self.coordinator.state_root / "serving" / serving_job
+        matches = []
+        for name in ("policy.json", "parent-policy.json"):
+            path = root / name
+            if path.is_file() and policy_digest(json.loads(path.read_bytes())) == candidate["policy_sha256"]:
+                matches.append(path)
+        if len(matches) != 1:
+            raise LedgerConflict("Serving endpoint does not contain exactly one candidate policy identity")
+        return matches[0]
+
+    def policy_seed(self, candidate_id):
+        candidate = self._candidate(candidate_id)
+        if candidate["change_class"] == "baseline":
+            path = self.coordinator.state_root / "inputs/baseline-policy.json"
+        elif candidate["change_class"] == "joint":
+            return self.policy_seed(candidate["components"]["model"])
+        elif candidate["change_class"] == "driver":
+            return self.policy_seed(candidate["parent"])
+        else:
+            workflow = self._model_workflow(candidate_id)
+            path = Path(workflow["details"]["policy_path"])
+        if (not path.is_file() or path.is_symlink()
+                or policy_digest(json.loads(path.read_bytes())) != candidate["policy_sha256"]):
+            raise LedgerConflict("Candidate policy seed differs from the controller manifest")
         return path
 
     def driver_binary(self, candidate_id):
@@ -211,12 +229,14 @@ class GameWorldProviderRunner:
                       "environment": config["environment"], "environment_id": config["environment_id"],
                       "image_id": config["serving_image_id"], "app_id": config["serving_app_id"],
                       "isolation_policy": "app-scoped"}
-            if assignment.get("mode") == "baseline":
-                await self.serving.prepare_baseline(
-                    row["job_id"], self.coordinator.state_root / "inputs/baseline-policy.json", **common)
+            parent = self._job_candidate(row["job_id"])
+            parent_adapter = self.parent_adapter(parent)
+            if assignment.get("mode") == "source":
+                await self.serving.prepare_source(
+                    row["job_id"], self.policy_seed(parent), parent_adapter, **common)
             else:
                 output = self.coordinator.state_root / "modal" / assignment["training_job"]
-                await self.serving.prepare(row["job_id"], output, **common)
+                await self.serving.prepare(row["job_id"], output, parent_adapter, **common)
             return await self.serving.start(row["job_id"], self.candidate_api_key)
         except BaseException:
             await self.cleanup_serving_job(row["job_id"])
