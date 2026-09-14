@@ -181,12 +181,24 @@ class CampaignController:
         if not IDENTIFIER.fullmatch(job_id) or kind not in JOB_GROUPS:
             raise ValueError("Unsupported job identity or kind")
         positive_integer(timeout_seconds, "timeout_seconds")
-        if (not reservations and kind != "driver_build") or set(reservations) - {"modal_micro_usd", "litellm_tokens"}:
-            raise ValueError("Explicit supported resource reservations required")
-        required_resource = None if kind == "driver_build" else ("litellm_tokens" if kind == "research" else "modal_micro_usd")
-        if required_resource is not None and required_resource not in reservations:
-            raise ValueError("Job is missing required provider budget admission")
         task_contract = self.contract["spec"].get("assignment_kind") == "gameworld-task"
+        if set(reservations) - {"modal_micro_usd", "litellm_tokens"}:
+            raise ValueError("Explicit supported resource reservations required")
+        if task_contract:
+            expected_resources = {
+                "training": {"modal_micro_usd"},
+                "serving": {"modal_micro_usd"},
+                "research": {"litellm_tokens"},
+            }.get(kind, set())
+            if set(reservations) != expected_resources:
+                raise ValueError("GameWorld job resources differ from the actual provider owner")
+        else:
+            if not reservations and kind != "driver_build":
+                raise ValueError("Explicit supported resource reservations required")
+            required_resource = None if kind == "driver_build" else (
+                "litellm_tokens" if kind == "research" else "modal_micro_usd")
+            if required_resource is not None and required_resource not in reservations:
+                raise ValueError("Job is missing required provider budget admission")
         if kind == "driver_build" and task_contract:
             probe = set(assignment) == {"pool", "operation"} and assignment.get("operation") == "warm-driver-probe"
             candidate_build = (set(assignment) == {"pool", "operation", "proposal_id", "proposal_sha256", "patch_sha256"}

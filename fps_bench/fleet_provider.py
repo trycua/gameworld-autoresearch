@@ -92,8 +92,7 @@ class FleetLifecycle:
         if job["kind"] not in ("driver_build", "rollout", "evaluation"):
             raise ValueError("Only desktop jobs may use the Fleet lifecycle")
         resources = set(specification["reservations"])
-        if ((job["kind"] == "driver_build" and resources)
-                or (job["kind"] in ("rollout", "evaluation") and resources != {"modal_micro_usd"})):
+        if resources:
             raise ValueError("Fleet desktop job resources differ from the controller contract")
         assignment = specification["assignment"]
         if job["kind"] == "driver_build" and (assignment.get("pool") != self.pool

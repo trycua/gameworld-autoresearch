@@ -172,7 +172,7 @@ class FleetTests(unittest.TestCase):
                       "task": task["task"], "seed": task["seed"], "repeat": 0,
                       "comparison": "provider-cleanup"}
         controller.admit_job("evaluation", "baseline", "evaluation", assignment,
-                             {"modal_micro_usd": 100}, 600)
+                             {}, 600)
         backend = FakeBackend(controller.contract["spec"]["provenance"]["image"])
         lifecycle = FleetLifecycle(controller, "test-pool", task_fixture.home / "fleet", backend)
         lifecycle.output.mkdir()
@@ -182,8 +182,8 @@ class FleetTests(unittest.TestCase):
                                  "steps": 10, "invalid_actions": 0, "seconds": 5.0}, "e" * 64)
         self.run_async(lifecycle.release("evaluation"))
         job = controller.snapshot()["jobs"][0]
-        self.assertEqual(job["state"], "billing_pending")
-        self.assertEqual(controller.recovery_actions()[0]["action"], "reconcile_provider_billing")
+        self.assertEqual(job["state"], "cleaned")
+        self.assertEqual(controller.recovery_actions(), [])
 
 
 if __name__ == "__main__":

@@ -145,7 +145,7 @@ class FleetExecutorTests(unittest.TestCase):
                       "policy_sha256": baseline["policy_sha256"],
                       "driver_sha256": baseline["driver_sha256"]}
         controller.admit_job("rollout-one", "baseline", "rollout", assignment,
-                             {"modal_micro_usd": 100}, 600)
+                             {}, 600)
         fixture = self.home / "rollout-fixture"
         dataset = fixture / "dataset"
         (dataset / "images").mkdir(parents=True)
@@ -188,7 +188,7 @@ class FleetExecutorTests(unittest.TestCase):
         result = self.run_async(executor.rollout(
             "rollout-one", identity_path, {"QWEN_BASE_URL": endpoint, "QWEN_API_KEY": "x" * 32}))
         self.assertEqual(result["result"]["dataset_sha256"], dataset_hash)
-        self.assertEqual(controller.snapshot()["jobs"][0]["state"], "billing_pending")
+        self.assertEqual(controller.snapshot()["jobs"][0]["state"], "cleaned")
         registry = GameWorldTrainingRegistry(controller)
         registry.register_rollout("rollout-one", result["artifacts"]["root"], result["artifacts"])
         combined = registry.export(["rollout-one"], self.home / "combined-rollouts")
@@ -254,7 +254,7 @@ class FleetExecutorTests(unittest.TestCase):
                       "task": task["task"], "seed": task["seed"], "repeat": 0,
                       "comparison": "evaluation-one"}
         controller.admit_job("evaluation-one", "baseline", "evaluation", assignment,
-                             {"modal_micro_usd": 100}, 600)
+                             {}, 600)
         fixture = self.home / "evaluation-fixture"
         fixture.mkdir()
         summary = {"status": "complete", "success": False, "steps": 1, "invalid_actions": 0,
@@ -282,7 +282,7 @@ class FleetExecutorTests(unittest.TestCase):
             "evaluation-one", policy_path,
             {"QWEN_BASE_URL": endpoint, "QWEN_API_KEY": "x" * 32}, driver_path))
         self.assertEqual(completed["result"]["task_id"], task["id"])
-        self.assertEqual(controller.snapshot()["jobs"][0]["state"], "billing_pending")
+        self.assertEqual(controller.snapshot()["jobs"][0]["state"], "cleaned")
 
 
 if __name__ == "__main__":

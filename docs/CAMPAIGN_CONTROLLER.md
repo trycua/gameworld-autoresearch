@@ -96,11 +96,13 @@ requires `--reason` and clearly reports `provider_cleanup_not_executed=true`.
 
 ## Budget and telemetry integration boundaries
 
-Evaluation/training admission needs a Modal reservation; research admission needs
-a LiteLLM token reservation. Fleet-only driver builds may reserve no Modal budget,
-but still require a desktop slot, campaign deadline and provider cleanup receipt.
-The user capped Modal, not Fleet billing; Fleet costs are not silently relabeled
-as Modal spend.
+GameWorld training and serving admission need a Modal reservation; research
+admission needs a LiteLLM token reservation. Fleet driver builds, rollouts and
+evaluations carry no Modal reservation because their claims cannot authenticate or
+reconcile Modal billing. Their shared Qwen inference deployment must instead be
+covered once by its owning serving admission. Fleet jobs still require a desktop
+slot, campaign deadline and provider cleanup receipt. The user capped Modal, not
+Fleet billing; Fleet costs are not silently relabeled as Modal spend.
 
 All receipt arguments are trusted-controller inputs, not cryptographic evidence.
 Live adapters must authenticate/validate usage, handle bounded upstream retries,
