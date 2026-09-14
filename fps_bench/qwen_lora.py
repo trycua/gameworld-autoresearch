@@ -48,10 +48,11 @@ def action_batch(processor, sample, dataset_root, max_tokens=4096):
 
 
 def verify_adapter(root, expected_hash, base_model, base_revision, dataset_hash, contract_hash):
-    manifest = json.loads(checked_bytes(root, "adapter-manifest.json", expected_hash))
+    manifest_data = checked_bytes(root, "adapter-manifest.json", expected_hash)
+    manifest = json.loads(manifest_data)
     expected = {"schema_version": 1, "base_model": base_model, "base_revision": base_revision,
                 "processor_revision": base_revision, "dataset_sha256": dataset_hash, "contract_sha256": contract_hash}
-    if any(manifest.get(key) != value for key, value in expected.items()):
+    if canonical(manifest) != manifest_data or any(manifest.get(key) != value for key, value in expected.items()):
         raise ValueError("Adapter provenance does not match the assigned candidate")
     files = manifest.get("files", {})
     if not {"adapter_config.json", "adapter_model.safetensors"} <= files.keys():
@@ -135,7 +136,7 @@ def train_and_reload(base, fresh_base, batches, output, *, base_model, base_revi
     adapter = output / "adapter"
     model.save_pretrained(adapter, safe_serialization=True)
     files = {path.name: digest(path.read_bytes()) for path in adapter.iterdir() if path.is_file()}
-    manifest = {"schema_version": 1, "base_model": base_model, "base_revision": base_revision,
+    manifest = {"schema_version": 1, "objective": "sft", "base_model": base_model, "base_revision": base_revision,
                 "processor_revision": base_revision, "dataset_sha256": dataset_hash, "contract_sha256": contract_hash,
                 "files": files, "hyperparameters": {"steps": steps, "learning_rate": learning_rate,
                 "seed": seed, "rank": 8, "alpha": 16, "targets": TARGETS, "batch_size": 1},
@@ -152,7 +153,9 @@ def train_and_reload(base, fresh_base, batches, output, *, base_model, base_revi
     error = float((observed - expected_logits).abs().max())
     if not torch.allclose(observed, expected_logits, atol=1e-4, rtol=1e-4):
         raise ValueError("Saved adapter reload changes logits")
-    result = {"status": "complete", "steps": steps, "losses": losses, "adapter_manifest_sha256": manifest_hash,
+    result = {"status": "complete", "objective": "sft", "dataset_sha256": dataset_hash,
+              "contract_sha256": contract_hash, "steps": steps, "losses": losses,
+              "adapter_manifest_sha256": manifest_hash,
               "updated_parameter_tensors": len(changed), "reload_max_logit_error": error,
               "seconds": time.monotonic() - started,
               "peak_cuda_allocated_bytes": torch.cuda.max_memory_allocated(device) if device.type == "cuda" else None,

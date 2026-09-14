@@ -1,13 +1,17 @@
 """Offline checks for the durable GameWorld joint workflow coordinator."""
 
 import copy
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import tempfile
 import unittest
 
+from PIL import Image
+
 from fps_bench.evaluation_contract import canonical, digest
 from fps_bench.gameworld_coordinator import GameWorldCoordinator
+from fps_bench.gameworld_training import GameWorldTrainingRegistry
 import scripts.gameworld_research_check as research_fixtures
 
 
@@ -111,7 +115,7 @@ class CoordinatorTests(unittest.TestCase):
         self.coordinator.register(proposal)
         self.coordinator.start_next("model-action")
         self.assertEqual(len(self.coordinator._items(proposal["id"], "rollout")), 1)
-        self.coordinator.allocate_model_budget("model-action", 1_000_000, 1_000_000)
+        self.coordinator.allocate_model_budget("model-action", 5_000_000, 5_000_000)
         rollout = self.coordinator.admit_ready(1)[0]["job_id"]
         artifact = self.root / "coordinator/fleet" / rollout
         artifact.mkdir(parents=True)
@@ -147,16 +151,55 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(len(items), 136)
         self.assertEqual({item["candidate"] for item in items}, {"baseline", served_model})
         self.assertEqual(self.coordinator.controller.snapshot()["budget"]["resources"]["modal_micro_usd"]["committed"],
-                         2_000_000)
+                         10_000_000)
 
-    def test_sft_waits_for_authenticated_dataset_instead_of_invalid_grpo_rollout(self):
+    def test_sft_attaches_authenticated_dataset_without_invalid_grpo_rollout(self):
         proposal = self.fixture.model_proposal("model-sft")
         proposal["experiment"]["objective"] = "sft"
         proposal["experiment"]["rollouts_per_task"] = 1
         self.coordinator.register(proposal)
         self.coordinator.start_next("sft-action")
         self.assertEqual(self.coordinator._items(proposal["id"]), [])
-        self.assertEqual(self.coordinator.required_actions()[0]["action"], "attach-authenticated-sft-dataset")
+        self.assertEqual(self.coordinator.required_actions()[0]["action"], "allocate-model-budget")
+        self.coordinator.allocate_model_budget("sft-action", 5_000_000, 5_000_000)
+        task = proposal["experiment"]["training_tasks"][0]
+        dataset = self.root / "sft-dataset"
+        (dataset / "images").mkdir(parents=True)
+        image_path = dataset / "image.png"
+        Image.new("RGB", (16, 16), (1, 2, 3)).save(image_path)
+        image = image_path.read_bytes()
+        image_name = "images/" + digest(image) + ".png"
+        image_path.rename(dataset / image_name)
+        sample = {"id": task + ":demo-1", "messages": [
+            {"role": "system", "content": "play"},
+            {"role": "user", "content": [{"type": "text", "text": "act"},
+                                             {"type": "image", "image": image_name}]},
+        ], "completion": [{"role": "assistant", "content": '{"tool_name":"wait","arguments":{}}'}]}
+        samples = canonical(sample)
+        (dataset / "samples.jsonl").write_bytes(samples)
+        source = {"schema_version": 1, "kind": "teacher-policy", "tasks": [task],
+                  "rights": "Synthetic test fixture", "artifact_sha256": "5" * 64,
+                  "created_at": datetime.now(timezone.utc).isoformat(),
+                  "evaluation_policy_contains_privileged_state": False}
+        source_path = self.root / "sft-source.json"
+        source_path.write_bytes(canonical(source))
+        manifest = {"schema_version": 1, "purpose": "train-only-action-imitation",
+                    "contract_sha256": self.contract_hash, "samples": 1, "episodes": [],
+                    "files": {"samples.jsonl": digest(samples), image_name: digest(image)},
+                    "gameworld": {"schema_version": 1, "tasks": [task],
+                                  "driver_sha256": "c" * 64,
+                                  "source_receipt_sha256": digest(canonical(source))}}
+        (dataset / "dataset.json").write_bytes(canonical(manifest))
+        dataset_sha256 = digest(canonical(manifest))
+        self.coordinator.registry = GameWorldTrainingRegistry(
+            self.coordinator.controller, self.fixture.policy, self.fixture.catalog)
+        self.coordinator.attach_sft_dataset("sft-action", dataset, dataset_sha256, source_path)
+        training = self.coordinator._items(proposal["id"], "training")
+        self.assertEqual(len(training), 1)
+        self.assertEqual(training[0]["assignment"]["objective"], "sft")
+        admitted = self.coordinator.admit_ready(1)[0]["job_id"]
+        authenticated = self.coordinator.registry.authenticate(admitted)
+        self.assertEqual(authenticated["source_receipt"], source)
 
     def test_failed_rollout_rejects_without_training_admission(self):
         proposal = self.fixture.model_proposal("failed-rollout")

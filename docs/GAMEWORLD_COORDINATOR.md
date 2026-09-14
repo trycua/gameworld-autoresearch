@@ -14,9 +14,10 @@ The coordinator currently persists and validates these paths:
   paired development episodes.
 - Qualified driver plus live qualified model -> fresh comparison identity -> all
   272 cells of the 2x2 baseline/driver/model/joint development schedule.
-- SFT proposals stop at `attach-authenticated-sft-dataset`; they never get silently
-  converted into invalid one-member GRPO rollouts. Dataset ingestion and serving
-  support remain an explicit implementation gate.
+- SFT proposals accept only task-prefixed train-split demonstrations with an
+  immutable source receipt, explicit rights, a privileged-state exclusion and a
+  frozen driver/contract identity. They then use the same Modal export, adapter
+  serving and paired evaluation path as GRPO.
 
 Fleet build, rollout and evaluation jobs do not reserve Modal dollars. The Modal
 training or serving resource that actually owns the GPU lifetime holds and later
@@ -40,7 +41,7 @@ PYTHONPATH=. python3 -m fps_bench.gameworld_coordinator status \
 ```
 
 Use `register`, `start`, `attach-patch`, `allocate`, `admit`, `advance`,
-`dataset`, `joint` and `close-model` for individual state transitions. `status`
+`dataset`, `attach-sft`, `joint` and `close-model` for individual state transitions. `status`
 returns `required_actions`, including exactly-once dispatchable job IDs. Reopening
 the coordinator with the same campaign, contract, baseline policy and state root
 preserves queues and does not duplicate jobs.
@@ -53,7 +54,7 @@ PYTHONPATH=. .venv/bin/python scripts/gameworld_coordinator_check.py
 
 The offline checks cover driver/GRPO routing, the full 34-game paired and factorial
 queue sizes, comparison isolation, model budget allocation, failed-rollout
-rejection, SFT fail-closed behavior and restart idempotency. They do not constitute
-a live Fleet or Modal campaign. Remaining gates are an authenticated SFT registry,
-a provider runner/watchdog, current image/contract publication, live billing
+rejection, authenticated SFT training/serving and restart idempotency. They do not
+constitute a live Fleet or Modal campaign. Remaining gates are a credentialed
+provider runner/watchdog, current image/contract publication, live billing
 reconciliation and bounded real vertical slices.

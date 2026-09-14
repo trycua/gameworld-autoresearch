@@ -126,7 +126,7 @@ class SupervisorTests(unittest.TestCase):
                 "evaluation_tasks": list(self.supervisor.context["splits"]["development"]),
                 "rollouts_per_task": 2, "max_trajectory_steps": 4, "optimizer_steps": 2,
             },
-            "budget": {"modal_micro_usd": 2_000_000, "litellm_tokens": 1000, "desktop_episodes": 68,
+            "budget": {"modal_micro_usd": 10_000_000, "litellm_tokens": 1000, "desktop_episodes": 68,
                        "timeout_seconds": 600},
         }
 

@@ -78,6 +78,9 @@ class LoRATests(unittest.TestCase):
         self.assertEqual(recorder.rows[1][0][3]["gameworld_train_loss"], result["losses"][1]["loss"])
         self.assertEqual(result["telemetry_errors"], [])
         self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["objective"], "sft")
+        self.assertEqual(result["dataset_sha256"], "a" * 64)
+        self.assertEqual(result["contract_sha256"], "b" * 64)
         self.assertEqual(result["steps"], 2)
         self.assertGreater(result["updated_parameter_tensors"], 0)
         self.assertLessEqual(result["reload_max_logit_error"], 1e-4)
@@ -89,6 +92,7 @@ class LoRATests(unittest.TestCase):
         adapter = self.home / "run" / "adapter"
         verified = verify_adapter(adapter, result["adapter_manifest_sha256"], "tiny-random-qwen3-vl-test",
                                   "local-fixture", "a" * 64, "b" * 64)
+        self.assertEqual(verified["objective"], "sft")
         self.assertEqual(verified["hyperparameters"]["rank"], 8)
         weights = adapter / "adapter_model.safetensors"
         weights.write_bytes(weights.read_bytes() + b"changed")

@@ -118,9 +118,10 @@ class GameWorldModalTests(unittest.TestCase):
         self.controller.admit_job("training-one", "baseline", "training", assignment,
                                   {"modal_micro_usd": 10_000_000}, 600)
         authenticated = {"dataset_sha256": self.dataset_hash, "root": str(self.dataset),
-                         "jobs": ["rollout-one"], "manifest": manifest}
+                         "jobs": ["rollout-one"], "manifest": manifest, "policy": self.identity}
         worker = {"kind": "gameworld-grpo", "objective": "grpo", "steps": 2,
-                  "dataset_sha256": self.dataset_hash, "policy_sha256": baseline["policy_sha256"],
+                  "dataset_sha256": self.dataset_hash, "tasks": [train["id"]],
+                  "policy_sha256": baseline["policy_sha256"],
                   "driver_sha256": baseline["driver_sha256"], "parent_adapter_sha256": None}
         self.backend = FakeModal()
         self.lifecycle = ModalTrainingLifecycle(self.controller, self.backend, Registry(authenticated, worker))

@@ -13,6 +13,7 @@ from fps_bench.campaign_ledger import BudgetRefused, LedgerConflict
 from fps_bench.evaluation_contract import canonical, digest, exclusive_write
 from fps_bench.gameworld_grpo import validate_policy_identity, verify_grpo_adapter
 from fps_bench.modal_scope import check_scope
+from fps_bench.qwen_lora import verify_adapter as verify_sft_adapter
 
 
 GPU = "L4"
@@ -194,9 +195,19 @@ class GameWorldServingLifecycle:
                     or bundle.get("adapter_manifest_sha256") != assignment["adapter_sha256"]):
                 raise LedgerConflict("Serving input differs from the completed training job")
         policy_identity = json.loads((training_output / "policy.json").read_bytes())
-        adapter_manifest = verify_grpo_adapter(
-            training_output / "adapter", assignment["adapter_sha256"], policy_identity,
-            bundle["dataset_sha256"], parent["driver_sha256"])
+        adapter_data = (training_output / "adapter/adapter-manifest.json").read_bytes()
+        adapter_identity = json.loads(adapter_data)
+        if adapter_identity.get("objective") == "grpo":
+            adapter_manifest = verify_grpo_adapter(
+                training_output / "adapter", assignment["adapter_sha256"], policy_identity,
+                bundle["dataset_sha256"], parent["driver_sha256"])
+        elif adapter_identity.get("objective") == "sft":
+            adapter_manifest = verify_sft_adapter(
+                training_output / "adapter", assignment["adapter_sha256"],
+                parent["model"]["base_model"], parent["model"]["base_revision"],
+                bundle["dataset_sha256"], self.controller.contract_hash)
+        else:
+            raise ValueError("Serving adapter has an unsupported training objective")
         scope = {"workspace": workspace, "environment": environment, "environment_id": environment_id,
                  "app": app, "app_id": app_id, "isolation_policy": isolation_policy}
         guard = await check_scope(self.backend, scope)
@@ -209,6 +220,7 @@ class GameWorldServingLifecycle:
                     "seconds": specification["timeout_seconds"], "training_output": str(training_output),
                     "training_job": assignment["training_job"], "hypothesis": assignment["hypothesis"],
                     "comparison": assignment["comparison"],
+                    "objective": adapter_manifest["objective"],
                     "adapter_manifest_sha256": assignment["adapter_sha256"],
                     "served_model": assignment["served_model"], "generation": assignment["generation"],
                     "base_model": parent["model"]["base_model"], "base_revision": parent["model"]["base_revision"],

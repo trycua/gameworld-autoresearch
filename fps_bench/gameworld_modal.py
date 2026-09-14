@@ -1,4 +1,4 @@
-"""Authenticated Modal transfer and execution for GameWorld GRPO updates."""
+"""Authenticated Modal transfer and execution for GameWorld SFT and GRPO updates."""
 
 import asyncio
 import json
@@ -9,9 +9,10 @@ from fps_bench.campaign_ledger import LedgerConflict
 from fps_bench.evaluation_contract import canonical, digest, exclusive_write
 from fps_bench.gameworld_grpo import verify_grpo_adapter, verify_parent_adapter, verify_rollout_dataset
 from fps_bench.gameworld_research import load_policy
-from fps_bench.gameworld_training import GameWorldTrainingRegistry
+from fps_bench.gameworld_training import GameWorldTrainingRegistry, verify_sft_dataset
 from fps_bench.modal_artifacts import ModalSandboxFiles
 from fps_bench.modal_training import ModalSDKBackend, ModalTrainingLifecycle
+from fps_bench.qwen_lora import verify_adapter as verify_sft_adapter
 
 
 MAX_REMOTE_FILE = 512 * 1024 * 1024
@@ -22,20 +23,24 @@ class GameWorldModalSDKBackend(ModalSDKBackend):
         import modal
 
         worker = plan.get("worker", {})
-        if worker.get("kind") != "gameworld-grpo" or worker.get("objective") != "grpo":
-            raise ValueError("Modal launch is not an admitted GameWorld GRPO worker")
+        objective = worker.get("objective")
+        if worker.get("kind") != "gameworld-" + str(objective) or objective not in ("sft", "grpo"):
+            raise ValueError("Modal launch is not an admitted GameWorld model worker")
         sandbox = await modal.Sandbox.from_id.aio(sandbox_id)
         command = [
             "python", "-m", "scripts.gameworld_model_worker",
-            "--objective", "grpo", "--dataset", "/dataset",
+            "--objective", objective, "--dataset", "/dataset",
             "--dataset-sha256", worker["dataset_sha256"],
-            "--policy-identity", "/input/policy.json",
-            "--driver-sha256", worker["driver_sha256"],
             "--steps", str(worker["steps"]), "--campaign", plan["tags"]["campaign"],
             "--experiment", plan["tags"]["job"],
             "--evaluation-contract-sha256", plan["contract_sha256"], "--output", "/output",
         ]
-        if worker["parent_adapter_sha256"] is not None:
+        if objective == "sft":
+            command.extend(["--contract-sha256", plan["contract_sha256"]])
+        else:
+            command.extend(["--policy-identity", "/input/policy.json",
+                            "--driver-sha256", worker["driver_sha256"]])
+        if objective == "grpo" and worker["parent_adapter_sha256"] is not None:
             command.extend(["--parent-adapter", "/input/parent-adapter"])
         process = await sandbox.exec.aio(*command, workdir="/app", timeout=timeout, secrets=[])
         await process.wait.aio()
@@ -54,7 +59,19 @@ class GameWorldTrainingArtifacts:
         self.controller = lifecycle.controller
         self.registry = lifecycle.training_registry
         self.files = files
-        self.policy, self.gameworld_context = load_policy()
+        if hasattr(self.registry, "policy") and hasattr(self.registry, "context"):
+            self.policy, self.gameworld_context = self.registry.policy, self.registry.context
+        else:
+            self.policy, self.gameworld_context = load_policy()
+
+    @staticmethod
+    def verify_adapter(root, adapter_sha256, policy_identity, worker, contract_hash):
+        if worker["objective"] == "grpo":
+            return verify_grpo_adapter(
+                root, adapter_sha256, policy_identity, worker["dataset_sha256"], worker["driver_sha256"])
+        return verify_sft_adapter(
+            root, adapter_sha256, policy_identity["base_model"], policy_identity["base_revision"],
+            worker["dataset_sha256"], contract_hash)
 
     async def context(self, job_id):
         job, launch, plan = self.lifecycle.stored(job_id)
@@ -70,15 +87,30 @@ class GameWorldTrainingArtifacts:
         authenticated = self.registry.authenticate(job_id)
         job, launch, plan, files = await self.context(job_id)
         worker, manifest = plan["worker"], authenticated["manifest"]
+        policy_identity = authenticated["policy"]
+        dataset_driver = (manifest["driver_sha256"] if worker["objective"] == "grpo"
+                          else manifest["gameworld"]["driver_sha256"])
         if (worker["dataset_sha256"] != authenticated["dataset_sha256"]
-                or worker["policy_sha256"] != digest(canonical(manifest["policy"]))
-                or worker["driver_sha256"] != manifest["driver_sha256"]):
-            raise LedgerConflict("Modal worker plan differs from the authenticated rollout dataset")
-        verify_rollout_dataset(authenticated["root"], authenticated["dataset_sha256"],
-                               policy=self.policy, context=self.gameworld_context,
-                               expected_policy=manifest["policy"],
-                               expected_driver_sha256=manifest["driver_sha256"])
-        parent = verify_parent_adapter(parent_adapter, worker["parent_adapter_sha256"], manifest["policy"])
+                or worker["policy_sha256"] != digest(canonical(policy_identity))
+                or worker["driver_sha256"] != dataset_driver):
+            raise LedgerConflict("Modal worker plan differs from the authenticated GameWorld dataset")
+        if worker["objective"] == "grpo":
+            verify_rollout_dataset(authenticated["root"], authenticated["dataset_sha256"],
+                                   policy=self.policy, context=self.gameworld_context,
+                                   expected_policy=policy_identity,
+                                   expected_driver_sha256=dataset_driver)
+            parent = verify_parent_adapter(
+                parent_adapter, worker["parent_adapter_sha256"], policy_identity)
+            manifest_name = "rollouts.json"
+        else:
+            verify_sft_dataset(
+                authenticated["root"], authenticated["dataset_sha256"], plan["contract_sha256"],
+                self.gameworld_context, worker["tasks"], worker["driver_sha256"],
+                authenticated["source_receipt"])
+            if parent_adapter is not None or worker["parent_adapter_sha256"] is not None:
+                raise ValueError("SFT warm start cannot load an existing adapter")
+            parent = None
+            manifest_name = "dataset.json"
         with self.controller.ledger.transaction() as connection:
             self.controller._controller(connection, admission=True)
             if self.controller._job(connection, job_id)["state"] != "running":
@@ -94,13 +126,13 @@ class GameWorldTrainingArtifacts:
             for name, expected in manifest["files"].items():
                 data = (root / name).read_bytes()
                 if digest(data) != expected:
-                    raise ValueError("GameWorld rollout file changed before Modal staging")
+                    raise ValueError("GameWorld dataset file changed before Modal staging")
                 await files.write(name, data)
                 if digest(await files.read("/dataset/" + name, MAX_REMOTE_FILE)) != expected:
-                    raise ValueError("Staged GameWorld rollout file failed read-back validation")
-            rollout_manifest = (root / "rollouts.json").read_bytes()
-            await files.write("rollouts.json", rollout_manifest)
-            await files.write("policy.json", canonical(manifest["policy"]), "/input")
+                    raise ValueError("Staged GameWorld dataset file failed read-back validation")
+            manifest_data = (root / manifest_name).read_bytes()
+            await files.write(manifest_name, manifest_data)
+            await files.write("policy.json", canonical(policy_identity), "/input")
             if parent is not None:
                 parent_manifest = json.loads((parent / "adapter-manifest.json").read_bytes())
                 await files.write("parent-adapter/adapter-manifest.json",
@@ -112,9 +144,10 @@ class GameWorldTrainingArtifacts:
     async def reconcile_stage(self, job_id):
         job, launch, plan, files = await self.context(job_id)
         worker = plan["worker"]
-        manifest_data = await files.read("/dataset/rollouts.json", MAX_REMOTE_FILE)
+        manifest_name = "rollouts.json" if worker["objective"] == "grpo" else "dataset.json"
+        manifest_data = await files.read("/dataset/" + manifest_name, MAX_REMOTE_FILE)
         if digest(manifest_data) != worker["dataset_sha256"]:
-            raise ValueError("Staged GameWorld rollout manifest differs from admission")
+            raise ValueError("Staged GameWorld dataset manifest differs from admission")
         manifest = json.loads(manifest_data)
         if digest(await files.read("/input/policy.json")) != worker["policy_sha256"]:
             raise ValueError("Staged GameWorld policy identity differs from admission")
@@ -125,7 +158,8 @@ class GameWorldTrainingArtifacts:
             parent_manifest = await files.read("/input/parent-adapter/adapter-manifest.json")
             if digest(parent_manifest) != worker["parent_adapter_sha256"]:
                 raise ValueError("Staged parent adapter identity differs from admission")
-        receipt = {"sandbox_id": launch["sandbox_id"], "dataset_sha256": worker["dataset_sha256"],
+        receipt = {"sandbox_id": launch["sandbox_id"], "objective": worker["objective"],
+                   "dataset_sha256": worker["dataset_sha256"],
                    "policy_sha256": worker["policy_sha256"],
                    "parent_adapter_sha256": worker["parent_adapter_sha256"]}
         with self.controller.ledger.transaction() as connection:
@@ -155,8 +189,8 @@ class GameWorldTrainingArtifacts:
             if not path.is_file() or path.is_symlink() or digest(path.read_bytes()) != expected:
                 raise ValueError("GameWorld exported artifact changed")
         policy_identity = json.loads((root / "policy.json").read_bytes())
-        verify_grpo_adapter(root / "adapter", receipt["adapter_manifest_sha256"], policy_identity,
-                            plan["worker"]["dataset_sha256"], plan["worker"]["driver_sha256"])
+        self.verify_adapter(root / "adapter", receipt["adapter_manifest_sha256"], policy_identity,
+                            plan["worker"], plan["contract_sha256"])
         result = json.loads((root / "result.json").read_bytes())
         self.controller.record_result(job_id, result, digest(canonical(receipt)))
         return receipt
@@ -191,11 +225,14 @@ class GameWorldTrainingArtifacts:
         if digest(result_data) != completion.get("result_sha256"):
             raise ValueError("GameWorld training result differs from its completion receipt")
         result = json.loads(result_data)
-        if (result.get("status") != "complete" or result.get("objective") != "grpo"
+        if (result.get("status") != "complete" or result.get("objective") != worker["objective"]
                 or result.get("steps") != worker["steps"]
-                or result.get("rollout_dataset_sha256") != worker["dataset_sha256"]
                 or result.get("adapter_manifest_sha256") != completion.get("adapter_manifest_sha256")):
-            raise ValueError("GameWorld training result differs from the admitted GRPO update")
+            raise ValueError("GameWorld training result differs from the admitted model update")
+        if (worker["objective"] == "grpo" and result.get("rollout_dataset_sha256") != worker["dataset_sha256"]
+                or worker["objective"] == "sft" and result.get("dataset_sha256") != worker["dataset_sha256"]
+                or worker["objective"] == "sft" and result.get("contract_sha256") != plan["contract_sha256"]):
+            raise ValueError("GameWorld training result dataset identity changed")
         adapter_manifest_data = await files.read("/output/training/adapter/adapter-manifest.json")
         if digest(adapter_manifest_data) != result["adapter_manifest_sha256"]:
             raise ValueError("GameWorld adapter identity differs from the training result")
@@ -219,8 +256,8 @@ class GameWorldTrainingArtifacts:
         for name, data in bundle.items():
             exclusive_write(output / name, data, 0o400)
         policy_identity = json.loads(bundle["policy.json"])
-        verify_grpo_adapter(output / "adapter", result["adapter_manifest_sha256"], policy_identity,
-                            worker["dataset_sha256"], worker["driver_sha256"])
+        self.verify_adapter(output / "adapter", result["adapter_manifest_sha256"], policy_identity,
+                            worker, plan["contract_sha256"])
         receipt = {"job_id": job_id, "sandbox_id": launch["sandbox_id"], "output": str(output.resolve()),
                    "dataset_sha256": worker["dataset_sha256"],
                    "adapter_manifest_sha256": result["adapter_manifest_sha256"],

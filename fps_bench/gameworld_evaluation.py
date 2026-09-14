@@ -12,14 +12,23 @@ from fps_bench.gameworld_suite_episode import DRIVER as BASELINE_DRIVER_SHA256
 
 SOURCE_FILES = (
     "fps_bench/campaign_controller.py",
+    "fps_bench/driver_candidate.py",
     "fps_bench/evaluation_contract.py",
+    "fps_bench/fleet_provider.py",
     "fps_bench/gameworld_coordinator.py",
     "fps_bench/gameworld_evaluation.py",
     "fps_bench/gameworld_candidate_episode.py",
+    "fps_bench/gameworld_fleet.py",
     "fps_bench/gameworld_grpo.py",
+    "fps_bench/gameworld_modal.py",
     "fps_bench/gameworld_research.py",
     "fps_bench/gameworld_rollout.py",
+    "fps_bench/gameworld_serving.py",
     "fps_bench/gameworld_suite_episode.py",
+    "fps_bench/gameworld_training.py",
+    "fps_bench/qwen_lora.py",
+    "scripts/gameworld_driver_worker.py",
+    "scripts/gameworld_model_worker.py",
     "configs/evaluation/gameworld-suite-v1.json",
     "configs/gameworld-autoresearch.json",
 )

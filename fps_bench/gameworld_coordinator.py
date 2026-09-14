@@ -41,6 +41,8 @@ class GameWorldCoordinator:
         self.database = Path(database)
         self.state_root = Path(state_root).resolve()
         self.pool = pool
+        self.policy_path = Path(policy_path)
+        self.catalog_path = Path(catalog_path)
         self.supervisor = GameWorldResearchSupervisor(
             database, baseline_output, policy_path, catalog_path, telemetry_path)
         self.controller = CampaignController(database, contract_path, contract_hash)
@@ -114,7 +116,8 @@ class GameWorldCoordinator:
                 )
                 self.controller.ledger._event(connection, "gameworld_coordinator_initialized", expected)
         if self.registry is None:
-            self.registry = GameWorldTrainingRegistry(self.controller)
+            self.registry = GameWorldTrainingRegistry(
+                self.controller, self.policy_path, self.catalog_path)
         return self.snapshot()
 
     def register(self, proposal):
@@ -375,29 +378,51 @@ class GameWorldCoordinator:
         if allocation is None:
             raise BudgetRefused("Model Modal allocation is required before training admission")
         if self.registry is None:
-            self.registry = GameWorldTrainingRegistry(self.controller)
+            self.registry = GameWorldTrainingRegistry(
+                self.controller, self.policy_path, self.catalog_path)
         job_ids = sorted(item["job_id"] for item in items)
         for job_id in job_ids:
             root = self.state_root / "fleet" / job_id
             receipt = json.loads((root / "artifact-receipt.json").read_bytes())
             self.registry.register_rollout(job_id, root, receipt)
         exported = self.registry.export(job_ids, self.state_root / "datasets" / workflow["proposal_id"])
+        return self._queue_training(workflow, proposal, exported, job_ids)
+
+    def _queue_training(self, workflow, proposal, dataset, source_jobs):
         parent = self._candidate(self.controller.snapshot()["controller"]["champion"])
         assignment = {
             "split": "train", "tasks": sorted(proposal["experiment"]["training_tasks"]),
-            "dataset_sha256": exported["dataset_sha256"], "objective": proposal["experiment"]["objective"],
+            "dataset_sha256": dataset["dataset_sha256"], "objective": proposal["experiment"]["objective"],
             "policy_sha256": parent["policy_sha256"], "driver_sha256": parent["driver_sha256"],
             "steps": proposal["experiment"]["optimizer_steps"],
         }
+        allocation = workflow["details"]["modal_allocation"]
         self._queue(workflow["proposal_id"], "training", [{
             "candidate": parent["id"], "kind": "training", "assignment": assignment,
             "reservations": {"modal_micro_usd": allocation["training_micro_usd"]},
             "timeout_seconds": proposal["budget"]["timeout_seconds"],
         }])
-        details = {**workflow["details"], "dataset_sha256": exported["dataset_sha256"],
-                   "dataset_root": exported["root"], "rollout_jobs": job_ids}
+        details = {**workflow["details"], "dataset_sha256": dataset["dataset_sha256"],
+                   "dataset_root": dataset["root"], "source_jobs": source_jobs}
         self._set_workflow(workflow["proposal_id"], state="training", details=details)
-        return exported
+        return dataset
+
+    def attach_sft_dataset(self, action_id, dataset_root, dataset_sha256, source_receipt_path):
+        with self.controller.ledger.transaction() as connection:
+            workflow = self._workflow(connection, action_id)
+            proposal = self._proposal(connection, workflow["proposal_id"])
+        if workflow["track"] != "model" or workflow["state"] != "awaiting_sft_dataset":
+            raise LedgerConflict("SFT demonstrations are not expected for this workflow")
+        if "modal_allocation" not in workflow["details"]:
+            raise BudgetRefused("Model Modal allocation is required before SFT training admission")
+        if self.registry is None:
+            self.registry = GameWorldTrainingRegistry(
+                self.controller, self.policy_path, self.catalog_path)
+        parent = self.controller.snapshot()["controller"]["champion"]
+        source_receipt = json.loads(Path(source_receipt_path).read_bytes())
+        registered = self.registry.register_sft(
+            parent, dataset_root, dataset_sha256, proposal["experiment"]["training_tasks"], source_receipt)
+        return self._queue_training(workflow, proposal, registered, [])
 
     def _items(self, workflow, phase=None):
         with self.controller.ledger.transaction() as connection:
@@ -625,7 +650,9 @@ class GameWorldCoordinator:
                 action = "allocate-model-budget" if "modal_allocation" not in workflow["details"] else "register-training-dataset"
                 actions.append({"workflow": workflow["proposal_id"], "action": action})
             elif workflow["state"] == "awaiting_sft_dataset":
-                actions.append({"workflow": workflow["proposal_id"], "action": "attach-authenticated-sft-dataset"})
+                action = ("allocate-model-budget" if "modal_allocation" not in workflow["details"]
+                          else "attach-authenticated-sft-dataset")
+                actions.append({"workflow": workflow["proposal_id"], "action": action})
             elif workflow["state"] == "qualified_serving_live":
                 actions.append({"workflow": workflow["proposal_id"], "action": "start-joint-or-stop-serving"})
             elif workflow["state"] == "awaiting_serving_stop":
@@ -661,7 +688,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=[
         "initialize", "status", "register", "start", "attach-patch", "allocate", "admit",
-        "advance", "dataset", "joint", "close-model",
+        "advance", "dataset", "attach-sft", "joint", "close-model",
     ])
     parser.add_argument("--database", type=Path, required=True)
     parser.add_argument("--contract", type=Path, required=True)
@@ -679,6 +706,9 @@ def main():
     parser.add_argument("--patch", type=Path)
     parser.add_argument("--training-micro-usd", type=int)
     parser.add_argument("--serving-micro-usd", type=int)
+    parser.add_argument("--dataset-root", type=Path)
+    parser.add_argument("--dataset-sha256")
+    parser.add_argument("--source-receipt", type=Path)
     parser.add_argument("--maximum", type=int, default=2)
     parser.add_argument("--driver-action")
     parser.add_argument("--model-action")
@@ -715,6 +745,11 @@ def main():
         if not args.action:
             parser.error("dataset requires --action")
         result = coordinator.prepare_training_dataset(args.action)
+    elif args.operation == "attach-sft":
+        if not args.action or not args.dataset_root or not args.dataset_sha256 or not args.source_receipt:
+            parser.error("attach-sft requires --action, --dataset-root, --dataset-sha256 and --source-receipt")
+        result = coordinator.attach_sft_dataset(
+            args.action, args.dataset_root, args.dataset_sha256, args.source_receipt)
     elif args.operation == "joint":
         if not args.driver_action or not args.model_action:
             parser.error("joint requires --driver-action and --model-action")
