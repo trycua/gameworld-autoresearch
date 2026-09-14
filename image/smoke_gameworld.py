@@ -46,7 +46,7 @@ async def check_worker_transport():
         await FleetSandboxBackend().run(sandbox, directory, "sleep 20; echo transport-ready; exit 7", 30)
         output = Path(directory) / "output"
         assert json.loads((output / "provider-result.json").read_text()) == {"returncode": 7}
-        assert (output / "worker.log").read_text().strip() == "transport-ready"
+        assert (output / "transport/worker.log").read_text().strip() == "transport-ready"
         print(json.dumps({"worker_transport": "ready", "detached_seconds": 20}))
 
 

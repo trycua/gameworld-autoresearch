@@ -38,7 +38,7 @@ class WorkerTransportTests(unittest.IsolatedAsyncioTestCase):
             await FleetSandboxBackend().run(sandbox, temporary, "sleep 1.2; echo measured; exit 7", 5)
             output = Path(temporary) / "output"
             self.assertEqual(json.loads((output / "provider-result.json").read_text()), {"returncode": 7})
-            self.assertEqual((output / "worker.log").read_text().strip(), "measured")
+            self.assertEqual((output / "transport/worker.log").read_text().strip(), "measured")
         self.assertTrue(calls[0][0].startswith("python3 -c "))
         self.assertIn("start_new_session=True", calls[0][0])
         self.assertIn("close_fds=True", calls[0][0])
@@ -319,6 +319,8 @@ class FleetExecutorTests(unittest.TestCase):
                   "manifest_sha256": digest(canonical(manifest)), "execution_statuses": ["executed"]}
         (fixture / "result.json").write_bytes(canonical(result))
         (fixture / "provider-result.json").write_bytes(canonical({"returncode": 0}))
+        (fixture / "transport").mkdir()
+        (fixture / "transport/worker.log").write_text("worker output\n")
         executor = GameWorldFleetExecutor(
             controller, FakeLifecycle(controller), self.home / "evaluation-artifacts", FakeBackend(fixture))
         completed = self.run_async(executor.evaluate(
