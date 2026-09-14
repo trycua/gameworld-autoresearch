@@ -51,6 +51,7 @@ jobs:
         run: |
           docker run --rm --network none --entrypoint python "$IMAGE" image/qwen-training/smoke.py
           docker run --rm --network none --entrypoint python "$IMAGE" -m scripts.qwen_lora_check
+          docker run --rm --network none --entrypoint python "$IMAGE" -m scripts.gameworld_grpo_check
           docker run --rm --network none --entrypoint cat "$IMAGE" /app/training-image.json > training-image-source.json
       - name: Publish tested training image
         env:

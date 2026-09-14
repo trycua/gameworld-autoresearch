@@ -101,7 +101,7 @@ def load_policy(path=DEFAULT_POLICY, catalog_path=DEFAULT_CATALOG):
         raise ValueError("Driver source scope escaped the vendored Rust tree")
     model = policy["model"]
     if (set(model) != {"base_model", "base_revision", "objectives", "minimum_grpo_group_size",
-                       "maximum_grpo_group_size", "maximum_trajectory_steps", "maximum_optimizer_steps"}
+                       "maximum_grpo_group_size", "maximum_trajectory_steps", "maximum_optimizer_steps", "grpo"}
             or model["base_model"] != "Qwen/Qwen3-VL-2B-Instruct"
             or not REVISION.fullmatch(model["base_revision"])
             or model["objectives"] != ["sft", "grpo"]
@@ -109,6 +109,16 @@ def load_policy(path=DEFAULT_POLICY, catalog_path=DEFAULT_CATALOG):
             or not 1 <= model["maximum_trajectory_steps"] <= 60
             or not 1 <= model["maximum_optimizer_steps"] <= 32):
         raise ValueError("Model policy differs from the pinned Qwen pilot")
+    if model["grpo"] != {
+        "reward_version": "gameworld-progress-v1",
+        "terminal_success_weight": 1.0,
+        "progress_weight": 0.25,
+        "invalid_action_penalty": 0.1,
+        "driver_error_penalty": 0.1,
+        "clip_epsilon": 0.2,
+        "reference_kl_beta": 0.01,
+    }:
+        raise ValueError("GRPO reward or optimization policy changed")
     limits = policy["limits"]
     expected_limits = {
         "modal_micro_usd_total": LIMITS["modal_micro_usd"][0],

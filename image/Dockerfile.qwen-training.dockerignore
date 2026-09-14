@@ -14,6 +14,16 @@
 !fps_bench/gameworld_protocol.py
 !fps_bench/qwen_protocol.py
 !fps_bench/telemetry.py
+!fps_bench/campaign_ledger.py
+!fps_bench/gameworld_suite_catalog.py
+!fps_bench/gameworld_research.py
+!fps_bench/gameworld_grpo.py
+!configs/
+!configs/gameworld-autoresearch.json
+!configs/evaluation/
+!configs/evaluation/gameworld-suite-v1.json
 !scripts/
 !scripts/qwen_lora_worker.py
 !scripts/qwen_lora_check.py
+!scripts/gameworld_model_worker.py
+!scripts/gameworld_grpo_check.py

@@ -10,7 +10,11 @@ EXPECTED = {
     "image/qwen-training/write_provenance.py", "image/qwen-training/smoke.py",
     "fps_bench/__init__.py", "fps_bench/evaluation_contract.py", "fps_bench/qwen_lora.py",
     "fps_bench/training_data.py", "fps_bench/gameworld_protocol.py", "fps_bench/qwen_protocol.py",
-    "fps_bench/telemetry.py", "scripts/qwen_lora_worker.py", "scripts/qwen_lora_check.py",
+    "fps_bench/telemetry.py", "fps_bench/campaign_ledger.py", "fps_bench/gameworld_suite_catalog.py",
+    "fps_bench/gameworld_research.py", "fps_bench/gameworld_grpo.py",
+    "configs/gameworld-autoresearch.json", "configs/evaluation/gameworld-suite-v1.json",
+    "scripts/qwen_lora_worker.py", "scripts/qwen_lora_check.py", "scripts/gameworld_model_worker.py",
+    "scripts/gameworld_grpo_check.py",
 }
 
 

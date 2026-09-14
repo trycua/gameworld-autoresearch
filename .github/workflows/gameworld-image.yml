@@ -17,6 +17,7 @@ on:
       - scripts/gameworld_baseline_check.py
       - scripts/gameworld_driver_contract.py
       - scripts/gameworld_driver_worker.py
+      - scripts/gameworld_rollout_worker.py
       - .auto/measure_gameworld.sh
       - pyproject.toml
 

@@ -13,8 +13,12 @@ COPY image/qwen-training/requirements.lock /app/image/qwen-training/requirements
 RUN python -m pip install --no-cache-dir --require-hashes -r image/qwen-training/requirements.lock
 COPY fps_bench/__init__.py fps_bench/evaluation_contract.py fps_bench/qwen_lora.py \
      fps_bench/training_data.py fps_bench/gameworld_protocol.py fps_bench/qwen_protocol.py \
-     fps_bench/telemetry.py /app/fps_bench/
-COPY scripts/qwen_lora_worker.py scripts/qwen_lora_check.py /app/scripts/
+     fps_bench/telemetry.py fps_bench/campaign_ledger.py fps_bench/gameworld_suite_catalog.py \
+     fps_bench/gameworld_research.py fps_bench/gameworld_grpo.py /app/fps_bench/
+COPY configs/gameworld-autoresearch.json /app/configs/gameworld-autoresearch.json
+COPY configs/evaluation/gameworld-suite-v1.json /app/configs/evaluation/gameworld-suite-v1.json
+COPY scripts/qwen_lora_worker.py scripts/qwen_lora_check.py scripts/gameworld_model_worker.py \
+     scripts/gameworld_grpo_check.py /app/scripts/
 COPY image/qwen-training/cache_model.py image/qwen-training/write_provenance.py \
      image/qwen-training/smoke.py /app/image/qwen-training/
 RUN python image/qwen-training/cache_model.py && python image/qwen-training/write_provenance.py

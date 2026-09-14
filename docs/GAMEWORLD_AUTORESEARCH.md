@@ -54,3 +54,37 @@ an unselected proposal cannot consume Fleet or Modal resources. Candidate
 materialization, GRPO rollout collection, paired evaluation and factorial
 promotion remain separate provider-facing stages; they must not weaken this
 supervisor contract or mutate the frozen compatibility evidence.
+
+## Driver candidates
+
+`scripts/gameworld_driver_worker.py` accepts only a canonical approved proposal
+and a pure ASCII unified diff. It rejects new, deleted, renamed or binary files
+and paths outside the three allowlisted driver source trees. The worker applies
+the patch inside an ephemeral Fleet claim, rebuilds from the baked offline Cargo
+cache, requires a changed installed binary, runs Rust contract tests, and then
+checks focus, held keys, key release and real mouse delivery on the X11 desktop.
+The patch, source hashes, binary hashes, logs and test receipt form the immutable
+candidate artifact.
+
+## Model candidates
+
+`scripts/gameworld_rollout_worker.py` collects two to eight fresh trajectories
+from the same registered train task and initial state. Rollout generation is
+stochastic and deliberately does not use constrained decoding, so the offline
+trainer can recompute behavior-policy log probabilities for the distribution
+that actually sampled each response. Invalid JSON remains a measured action with
+an explicit reward penalty.
+
+Trainer inputs live under the rollout output's `dataset/` directory. They contain
+only screenshots, policy messages, responses, parsed actions and reproducible
+scalar rewards. Privileged before/after state and evaluator records stay under
+`custody/` and are never copied into the Modal training dataset. Both trees have
+separate content-addressed manifests.
+
+`scripts/gameworld_model_worker.py --objective grpo` loads the exact rollout
+policy twice: a frozen behavior/reference copy and a trainable LoRA copy. It
+normalizes rewards within each group, applies a clipped token-level policy ratio
+with reference KL, masks loss to generated assistant tokens, rejects all-zero
+variance batches, writes optimizer-step telemetry, saves an adapter and verifies
+that a fresh reload reproduces completion log probabilities. `--objective sft`
+retains the existing verified imitation warm-start path.

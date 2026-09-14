@@ -36,7 +36,16 @@
     "minimum_grpo_group_size": 2,
     "maximum_grpo_group_size": 8,
     "maximum_trajectory_steps": 60,
-    "maximum_optimizer_steps": 32
+    "maximum_optimizer_steps": 32,
+    "grpo": {
+      "reward_version": "gameworld-progress-v1",
+      "terminal_success_weight": 1.0,
+      "progress_weight": 0.25,
+      "invalid_action_penalty": 0.1,
+      "driver_error_penalty": 0.1,
+      "clip_epsilon": 0.2,
+      "reference_kl_beta": 0.01
+    }
   },
   "limits": {
     "modal_micro_usd_total": 2000000000,
