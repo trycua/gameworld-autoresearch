@@ -50,6 +50,23 @@ class CampaignProtocolForkTests(unittest.TestCase):
         self.assertFalse(self.destination.exists())
         self.assertFalse(self.receipt.exists())
 
+    def test_completed_image_import_hold_carries_forward(self):
+        self.ledger.reserve("image-import:one", "modal_micro_usd", 100, int(time.time()) + 600)
+        with self.ledger.transaction() as connection:
+            connection.execute("CREATE TABLE training_image_imports ("
+                               "id TEXT PRIMARY KEY, specification TEXT NOT NULL, state TEXT NOT NULL, "
+                               "image_id TEXT, error_type TEXT)")
+            connection.execute("INSERT INTO training_image_imports VALUES (?,?,'complete',?,NULL)",
+                               ("image-import:one", "{}", "im-test"))
+        fork(self.source, self.destination, "new-campaign", self.receipt)
+        snapshot = CampaignLedger(self.destination).snapshot()
+        held = next(row for row in snapshot["reservations"] if row["id"] == "image-import:one")
+        self.assertEqual(held["state"], "held")
+        with sqlite3.connect(self.destination) as connection:
+            self.assertEqual(connection.execute(
+                "SELECT image_id FROM training_image_imports WHERE id='image-import:one'").fetchone()[0],
+                             "im-test")
+
 
 if __name__ == "__main__":
     unittest.main()

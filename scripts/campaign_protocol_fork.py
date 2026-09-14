@@ -39,9 +39,13 @@ def _validate_terminal(connection):
     if "jobs" in tables and connection.execute(
             "SELECT 1 FROM jobs WHERE state!='cleaned' LIMIT 1").fetchone():
         raise ValueError("Protocol fork requires every controller job to be cleaned")
-    if connection.execute(
-            "SELECT 1 FROM reservations WHERE state='held' LIMIT 1").fetchone():
-        raise ValueError("Protocol fork requires every resource hold to be terminal")
+    held = {row[0] for row in connection.execute(
+        "SELECT id FROM reservations WHERE state='held'")}
+    completed_imports = ({row[0] for row in connection.execute(
+        "SELECT id FROM training_image_imports WHERE state='complete'")}
+                         if "training_image_imports" in tables else set())
+    if held - completed_imports:
+        raise ValueError("Protocol fork requires every non-import resource hold to be terminal")
     if "training_image_imports" in tables and connection.execute(
             "SELECT 1 FROM training_image_imports WHERE state!='complete' LIMIT 1").fetchone():
         raise ValueError("Protocol fork requires every image import to be complete")
