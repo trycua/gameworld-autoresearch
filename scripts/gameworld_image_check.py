@@ -84,6 +84,10 @@ def main():
     assert "image/write_provenance.py \"$SOURCE_REVISION\" --require-gameworld" in dockerfile
     assert TRIGGERS <= workflow_paths(workflow), TRIGGERS - workflow_paths(workflow)
     assert "python3 scripts/gameworld_image_check.py" in workflow
+    assert "PYTHONPATH=/opt/gameworld-autoresearch" in dockerfile
+    assert "RUN cd /tmp" in dockerfile
+    for worker in ("rollout", "driver"):
+        assert f"/opt/gameworld-autoresearch/scripts/gameworld_{worker}_worker.py --help" in dockerfile
     check_manifest()
     print("Validated GameWorld COPY inputs, rebuild triggers, and schema-v2 runtime provenance")
 

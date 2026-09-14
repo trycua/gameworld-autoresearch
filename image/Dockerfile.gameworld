@@ -6,6 +6,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG GAMEWORLD_REVISION=3c26bdab436800fd61ef40543b64ca40d12c7e4a
 ARG GAMEWORLD_GAMES_REVISION=55322928fa8bd51cb1719bd3807a32634aa5d3cb
 ENV GAMEWORLD_HOME=/opt/GameWorld \
+    PYTHONPATH=/opt/gameworld-autoresearch \
     CUA_DRIVER_SRC=/opt/gameworld-autoresearch/cua-driver \
     CARGO_TARGET_DIR=/opt/gameworld-target \
     CARGO_INCREMENTAL=1 \
@@ -32,6 +33,9 @@ COPY image/rebuild_driver.sh image/smoke_gameworld.py image/write_provenance.py 
 COPY .auto/gameworld-prompt.md .auto/measure_gameworld.sh .auto/
 COPY docs/GAMEWORLD_FLEET.md docs/GAMEWORLD_FLEET.md
 COPY README.md README.md
+RUN cd /tmp \
+    && /opt/gameworld-venv/bin/python /opt/gameworld-autoresearch/scripts/gameworld_rollout_worker.py --help \
+    && /opt/gameworld-venv/bin/python /opt/gameworld-autoresearch/scripts/gameworld_driver_worker.py --help
 ARG SOURCE_REVISION
 ARG SOURCE_URL=https://github.com/trycua/gameworld-autoresearch
 RUN /opt/gameworld-venv/bin/python image/write_provenance.py "$SOURCE_REVISION" --require-gameworld
