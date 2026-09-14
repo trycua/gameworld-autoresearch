@@ -85,8 +85,11 @@ The relay requires three distinct credentials: the local Pi bearer, a dedicated
 the response `x-litellm-call-id` to authenticated `/spend/logs/v2` rows filtered by
 the dedicated key alias, verifies final response usage, and settles the reservation
 atomically before replying. The configured two provider retries are included in a
-433,152-token reservation. Logged failed-attempt usage is used when present;
-otherwise each hidden retry retains the full 144,384-token attempt upper bound.
+3,342,336-token reservation. The 1 MiB text request limit accommodates the actual
+allowlisted driver sources; each attempt reserves the full byte limit plus
+65,536 tokens for output and framing rather than assuming four bytes per token.
+Logged failed-attempt usage is used when present; otherwise each hidden retry
+retains the full 1,114,112-token attempt allocation.
 
 Timeout, incomplete stream, missing/duplicate/cross-key spend rows, inconsistent
 usage or excessive retries freeze further admission and keep the reservation held.

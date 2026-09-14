@@ -13,6 +13,7 @@ from fps_bench.campaign_ledger import CampaignLedger
 from fps_bench.research_gateway import (
     ATTEMPT_HOLD,
     LiteLLMSpendReconciler,
+    MAX_BODY,
     ResearchGateway,
     REQUEST_HOLD,
     usage_observation,
@@ -104,6 +105,22 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 2)
         self.assertEqual(len(self.ledger.snapshot()["reservations"]), 2)
 
+    def test_real_driver_source_fits_with_conservative_token_reservation(self):
+        source = Path("cua-driver/rust/crates/platform-linux/src/input/mod.rs").read_text()
+        self.assertGreater(len(source.encode()), 65_536)
+        body = {"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": source}]}
+        encoded_bytes = len(json.dumps(body).encode())
+        self.assertLess(encoded_bytes, MAX_BODY)
+        self.assertGreaterEqual(ATTEMPT_HOLD, encoded_bytes + 16_384)
+        self.assertEqual(self.post(body)[0], 200)
+        self.assertEqual(self.ledger.snapshot()["reservations"][0]["amount"], REQUEST_HOLD)
+
+    def test_oversized_source_is_rejected_before_budget_or_provider(self):
+        body = {"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "x" * MAX_BODY}]}
+        self.assertEqual(self.post(body)[0], 400)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.ledger.snapshot()["reservations"], [])
+
     def test_reconciliation_failure_freezes_and_retains_hold(self):
         self.reconciler.error = ValueError("spend log unavailable")
         status, _, _ = self.post()
@@ -179,7 +196,7 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
     def test_images_and_large_bodies_rejected_before_dispatch(self):
-        for content in ["x" * 70000, [{"type": "image_url", "image_url": {"url": "https://example.com"}}]]:
+        for content in ["x" * MAX_BODY, [{"type": "image_url", "image_url": {"url": "https://example.com"}}]]:
             self.assertEqual(self.post({"model": "astra", "messages": [{"role": "user", "content": content}]})[0], 400)
         self.assertEqual(self.calls, [])
 

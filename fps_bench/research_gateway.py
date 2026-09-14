@@ -19,9 +19,9 @@ from fps_bench.campaign_ledger import BudgetRefused, CampaignLedger
 MODELS = ("astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")
 UPSTREAM_ROOT = "https://litellm-public.tail204509.ts.net"
 UPSTREAM = UPSTREAM_ROOT + "/v1/chat/completions"
-MAX_BODY = 65_536
+MAX_BODY = 1_048_576
 MAX_RESPONSE = 8 * 1024 * 1024
-ATTEMPT_HOLD = 144_384
+ATTEMPT_HOLD = MAX_BODY + 65_536
 MAX_UPSTREAM_RETRIES = 2
 REQUEST_HOLD = ATTEMPT_HOLD * (MAX_UPSTREAM_RETRIES + 1)
 MAX_SPEND_LOG_PAGES = 10
