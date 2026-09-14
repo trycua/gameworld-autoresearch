@@ -1,0 +1,16 @@
+{
+  "providers": {
+    "cua-litellm": {
+      "baseUrl": "http://127.0.0.1:8765/v1",
+      "api": "openai-completions",
+      "apiKey": "$GAMEWORLD_RESEARCH_TOKEN",
+      "compat": { "supportsStore": false, "maxTokensField": "max_completion_tokens" },
+      "models": [
+        { "id": "astra", "name": "Astra (Cua LiteLLM)", "reasoning": true, "input": ["text", "image"], "contextWindow": 128000, "maxTokens": 16384 },
+        { "id": "gpt-5.6-sol", "name": "Sol (Cua LiteLLM)", "reasoning": true, "input": ["text", "image"], "contextWindow": 128000, "maxTokens": 16384 },
+        { "id": "gpt-5.6-terra", "name": "Terra (Cua LiteLLM)", "reasoning": true, "input": ["text", "image"], "contextWindow": 128000, "maxTokens": 16384 },
+        { "id": "gpt-5.6-luna", "name": "Luna (Cua LiteLLM)", "reasoning": true, "input": ["text", "image"], "contextWindow": 128000, "maxTokens": 16384 }
+      ]
+    }
+  }
+}

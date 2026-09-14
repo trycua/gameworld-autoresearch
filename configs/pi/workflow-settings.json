@@ -1,0 +1,10 @@
+{
+  "keywordTriggerEnabled": false,
+  "defaultEffort": "off",
+  "defaultConcurrency": 2,
+  "defaultAgentRetries": 0,
+  "defaultAgentTimeoutMs": 600000,
+  "defaultTokenBudget": 200000,
+  "persistAgentSessions": true,
+  "excludeSubagentTools": ["cua_sandbox"]
+}

@@ -6,3 +6,8 @@ uv.lock
 .auto/runs/
 cua-driver/rust/target/
 results/pi-sessions/*.log
+
+.pi-local/
+tools/pi/node_modules/
+
+.playwright-mcp/

@@ -99,6 +99,21 @@ Current tag: `cua-driver-bench-20260830-hold` (vendored driver: press_key hold_m
 `[include]`, so earlier tags never ran the boot-time build; this one registers it directly
 (build + install ≈ 60 s on a gVisor sandbox).
 
+## GameWorld research with pi and LiteLLM
+
+The new isolated research profile uses Astra, Sol, Terra and Luna through the Cua
+LiteLLM gateway, with `pi-dynamic-workflows` for `/deep-research`.
+See [PI_RESEARCH.md](docs/PI_RESEARCH.md) for setup, credentials and role routing.
+Approved campaign allowances are 1 billion LiteLLM tokens and USD 2,000 for Modal;
+the shared aggregate enforcement gates are still pending. This profile does not
+launch the legacy L-platform loop or paid training automatically.
+
+A private SearXNG pilot is deployed in `gvisor-dev`. See
+[deployment instructions](infra/searxng/README.md) and the
+[research-query evaluation](docs/results/2026-09-13-searxng-research-pilot.md).
+[Browser-backed research](docs/BROWSER_RESEARCH.md) adds `/hybrid-research` and
+`/browser-research` with a separate Playwright MCP session per gathering worker.
+
 ## Autoresearch with pi-cua + pi-autoresearch (primary loop)
 
 The loop is driven by [pi](https://github.com/earendil-works/pi) with two extensions:

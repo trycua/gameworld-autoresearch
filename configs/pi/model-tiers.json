@@ -1,0 +1,8 @@
+{
+  "tiers": {
+    "small": "cua-litellm/gpt-5.6-luna",
+    "medium": "cua-litellm/gpt-5.6-terra",
+    "big": "cua-litellm/gpt-5.6-sol",
+    "astra": "cua-litellm/astra"
+  }
+}

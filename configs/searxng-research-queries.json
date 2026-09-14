@@ -1,0 +1,13 @@
+[
+  {"id":"modal-trl","kind":"known-source","query":"site:modal.com/docs/examples/grpo_trl GRPO TRL","expected_urls":["https://modal.com/docs/examples/grpo_trl"]},
+  {"id":"modal-verl","kind":"known-source","query":"site:modal.com/docs/examples/grpo_verl GRPO verl","expected_urls":["https://modal.com/docs/examples/grpo_verl"]},
+  {"id":"qwen-model","kind":"known-source","query":"Qwen Qwen3-VL-2B-Instruct Hugging Face model card","expected_urls":["https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct"]},
+  {"id":"qwen-serving","kind":"known-source","query":"vLLM Qwen3 VL recipe serving multimodal","expected_urls":["https://docs.vllm.ai/projects/recipes/en/latest/Qwen/Qwen3-VL.html"]},
+  {"id":"gameworld-paper","kind":"known-source","query":"GameWorld benchmark games 2604.07429","expected_urls":["https://arxiv.org/abs/2604.07429","https://arxiv.org/html/2604.07429","https://arxiv.org/pdf/2604.07429"]},
+  {"id":"vl-training","kind":"discovery","query":"Qwen3 VL LoRA fine tuning TRL GRPO multimodal multi turn"},
+  {"id":"visual-rl","kind":"discovery","query":"GUI agent reinforcement learning GRPO screenshot visual computer use"},
+  {"id":"x11-driver","kind":"discovery","query":"X11 XTest XSendEvent Chromium trusted keyboard input events"},
+  {"id":"academic-gui","kind":"academic","query":"GUI agent reinforcement learning","engines":"arxiv,semantic scholar,google scholar"},
+  {"id":"academic-multimodal","kind":"academic","query":"multimodal multi turn reinforcement learning","engines":"arxiv,semantic scholar,google scholar"},
+  {"id":"academic-grpo","kind":"academic","query":"group relative policy optimization vision language","engines":"arxiv,semantic scholar,google scholar"}
+]

@@ -1,0 +1,18 @@
+{
+  "searxng_url": "http://gameworld-searxng.gvisor-dev.svc.cluster.local:8080",
+  "search_interval_ms": 5000,
+  "browser_tool_limit": 24,
+  "snapshot_character_limit": 24000,
+  "navigation_timeout_ms": 20000,
+  "worker_timeout_ms": 180000,
+  "workflow_timeout_ms": 600000,
+  "max_angles": 2,
+  "concurrency": 2,
+  "token_budget": 100000,
+  "models": {
+    "planner": "cua-litellm/gpt-5.6-luna",
+    "researcher": "cua-litellm/gpt-5.6-terra",
+    "verifier": "cua-litellm/gpt-5.6-sol",
+    "reporter": "cua-litellm/astra"
+  }
+}

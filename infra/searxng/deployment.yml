@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gameworld-searxng
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: gameworld-searxng
+  template:
+    metadata:
+      labels:
+        app: gameworld-searxng
+    spec:
+      runtimeClassName: gvisor
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 977
+        runAsGroup: 977
+        fsGroup: 977
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gameworld-searxng
+          image: docker.io/searxng/searxng@sha256:d0a4ca04e68c6d57fe45509ad5a6b10c890350724762ade3abea5363571aa29a
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: SEARXNG_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: gameworld-searxng-secret
+                  key: secret
+            - name: GRANIAN_HOST
+              value: "0.0.0.0"
+            - name: GRANIAN_WORKERS
+              value: "1"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          volumeMounts:
+            - name: settings
+              mountPath: /etc/searxng
+              readOnly: true
+            - name: cache
+              mountPath: /var/cache/searxng
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: settings
+          configMap:
+            name: gameworld-searxng-settings
+        - name: cache
+          emptyDir:
+            sizeLimit: 128Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi

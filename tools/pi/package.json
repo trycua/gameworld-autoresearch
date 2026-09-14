@@ -1,0 +1,15 @@
+{
+  "name": "gameworld-pi-research",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@playwright/mcp": "0.0.80",
+    "@quintinshaw/pi-dynamic-workflows": "3.11.0",
+    "yaml": "2.9.0"
+  }
+}
