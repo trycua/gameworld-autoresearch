@@ -26,8 +26,9 @@ RUN cd "$CUA_DRIVER_SRC/rust" \
     && cua-driver --version
 COPY fps_bench/ fps_bench/
 COPY configs/ configs/
+COPY scripts/gameworld_driver_contract.py scripts/gameworld_driver_worker.py scripts/
 COPY image/rebuild_driver.sh image/smoke_gameworld.py image/write_provenance.py image/
-COPY .auto/measure_gameworld.sh .auto/measure_gameworld.sh
+COPY .auto/gameworld-prompt.md .auto/measure_gameworld.sh .auto/
 COPY docs/GAMEWORLD_FLEET.md docs/GAMEWORLD_FLEET.md
 COPY README.md README.md
 ARG SOURCE_REVISION
