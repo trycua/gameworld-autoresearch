@@ -69,6 +69,7 @@ class ServingTests(unittest.TestCase):
         adapter = json.loads((self.output / "bundle.json").read_bytes())["adapter_manifest_sha256"]
         assignment = {"training_job": "training-one", "adapter_sha256": adapter,
                       "served_model": "model-candidate", "hypothesis": "Grouped rewards improve action choice.",
+                      "comparison": "model-proposal-one",
                       "generation": {"temperature": 0.8, "top_p": 0.95, "max_tokens": 128,
                                      "response_format": "unconstrained-json-text"}}
         self.training.controller.admit_job("serving-one", "baseline", "serving", assignment,

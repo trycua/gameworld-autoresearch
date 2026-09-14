@@ -278,19 +278,22 @@ class GameWorldControllerTests(unittest.TestCase):
                                    "served_model": template["served_model"]}}
         self.controller.register_candidate(self.baseline)
 
-    def complete(self, job, candidate, assignment, success):
+    def complete(self, job, candidate, assignment, success, settle=True):
         self.controller.begin_dispatch(job)
         self.controller.provider_started(job, "provider:" + job)
         result = {**assignment, "candidate": candidate, "contract_sha256": self.hash,
                   "status": "complete", "success": success, "steps": 10,
                   "invalid_actions": 0, "seconds": 5.0}
         self.controller.record_result(job, result, "e" * 64)
-        self.controller.cleanup_confirmed(job, "receipt:" + job, {"modal_micro_usd": 10})
+        if settle:
+            self.controller.cleanup_confirmed(job, "receipt:" + job, {"modal_micro_usd": 10})
+        else:
+            self.controller.provider_cleanup_confirmed(job, "receipt:" + job)
 
     def test_task_jobs_and_delayed_billing_release_concurrency(self):
         assignment = {"split": "development", "task_id": self.tasks[0]["id"],
                       "game": self.tasks[0]["game"], "task": self.tasks[0]["task"],
-                      "seed": 42, "repeat": 0}
+                      "seed": 42, "repeat": 0, "comparison": "billing-check"}
         self.controller.admit_job("task-eval", "baseline", "evaluation", assignment,
                                   {"modal_micro_usd": 100}, 600)
         self.controller.begin_dispatch("task-eval")
@@ -330,18 +333,39 @@ class GameWorldControllerTests(unittest.TestCase):
         self.controller.admit_job("training-one", "baseline", "training", training,
                                   {"modal_micro_usd": 100}, 600)
 
+    def test_task_candidate_requires_unique_comparison_identity(self):
+        candidate = {**copy.deepcopy(self.baseline), "id": "driver-candidate", "parent": "baseline",
+                     "change_class": "driver", "driver_sha256": "2" * 64, "patch_sha256": "3" * 64}
+        with self.assertRaises(ValueError):
+            self.controller.register_candidate(candidate)
+        candidate["comparison"] = "driver-isolated"
+        self.controller.register_candidate(candidate)
+        duplicate = {**candidate, "id": "second-driver", "driver_sha256": "4" * 64,
+                     "patch_sha256": "5" * 64}
+        with self.assertRaises(LedgerConflict):
+            self.controller.register_candidate(duplicate)
+        task = self.tasks[0]
+        assignment = {"split": "development", "task_id": task["id"], "game": task["game"],
+                      "task": task["task"], "seed": task["seed"], "repeat": 0,
+                      "comparison": "wrong-comparison"}
+        with self.assertRaises(ValueError):
+            self.controller.admit_job("wrong-comparison", candidate["id"], "evaluation", assignment,
+                                      {"modal_micro_usd": 100}, 600)
+
     def test_joint_registration_and_factorial_decision(self):
         driver = {**copy.deepcopy(self.baseline), "id": "driver-candidate", "parent": "baseline",
-                  "change_class": "driver", "driver_sha256": "2" * 64, "patch_sha256": "3" * 64}
+                  "change_class": "driver", "driver_sha256": "2" * 64, "patch_sha256": "3" * 64,
+                  "comparison": "driver-isolated"}
         model = {**copy.deepcopy(self.baseline), "id": "model-candidate", "parent": "baseline",
-                 "change_class": "model", "policy_sha256": "4" * 64}
+                 "change_class": "model", "policy_sha256": "4" * 64, "comparison": "model-isolated"}
         model["model"]["adapter_sha256"] = "5" * 64
         model["model"]["served_model"] = "qwen-model-candidate"
         self.controller.register_candidate(driver)
         self.controller.register_candidate(model)
         joint = {**copy.deepcopy(driver), "id": "joint-candidate", "change_class": "joint",
                  "model": copy.deepcopy(model["model"]), "policy_sha256": model["policy_sha256"],
-                 "components": {"driver": driver["id"], "model": model["id"]}}
+                 "components": {"driver": driver["id"], "model": model["id"]},
+                 "comparison": "joint-factorial"}
         with self.assertRaises(LedgerConflict):
             self.controller.register_candidate(joint)
         with self.controller.ledger.transaction() as connection:
@@ -355,13 +379,15 @@ class GameWorldControllerTests(unittest.TestCase):
             success = (candidate == joint["id"]
                        or candidate == driver["id"] and task_index == 1
                        or candidate == model["id"] and task_index == 2)
-            assignment = {key: run[key] for key in ("split", "task_id", "game", "task", "seed", "repeat")}
+            assignment = {**{key: run[key] for key in ("split", "task_id", "game", "task", "seed", "repeat")},
+                          "comparison": joint["comparison"]}
             job = f"factorial-{index}"
             self.controller.admit_job(job, candidate, "evaluation", assignment,
                                       {"modal_micro_usd": 100}, 600)
-            self.complete(job, candidate, assignment, success)
+            self.complete(job, candidate, assignment, success, settle=False)
         result = self.controller.decide_factorial(joint["id"])
         self.assertEqual(result["decision"], "nominate_joint")
+        self.assertTrue(all(job["state"] == "billing_pending" for job in self.controller.snapshot()["jobs"]))
         candidate = next(row for row in self.controller.snapshot()["candidates"] if row["id"] == joint["id"])
         self.assertEqual(candidate["state"], "nominated")
 

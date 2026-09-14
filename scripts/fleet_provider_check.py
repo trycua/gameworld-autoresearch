@@ -169,7 +169,8 @@ class FleetTests(unittest.TestCase):
         controller = task_fixture.controller
         task = task_fixture.tasks[0]
         assignment = {"split": "development", "task_id": task["id"], "game": task["game"],
-                      "task": task["task"], "seed": task["seed"], "repeat": 0}
+                      "task": task["task"], "seed": task["seed"], "repeat": 0,
+                      "comparison": "provider-cleanup"}
         controller.admit_job("evaluation", "baseline", "evaluation", assignment,
                              {"modal_micro_usd": 100}, 600)
         backend = FakeBackend(controller.contract["spec"]["provenance"]["image"])

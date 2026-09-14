@@ -108,6 +108,9 @@ class CampaignController:
         task_contract = self.contract["spec"].get("assignment_kind") == "gameworld-task"
         if task_contract and not SHA256.fullmatch(manifest.get("policy_sha256", "")):
             raise ValueError("GameWorld candidates require an immutable serving policy identity")
+        if (task_contract and manifest["change_class"] != "baseline"
+                and not IDENTIFIER.fullmatch(manifest.get("comparison", ""))):
+            raise ValueError("GameWorld candidates require an immutable comparison identity")
         payload = canonical(manifest).decode()
         with self.ledger.transaction() as connection:
             settings = self._controller(connection)
@@ -117,6 +120,10 @@ class CampaignController:
                     raise LedgerConflict("Candidate manifests are immutable")
                 return manifest["id"]
             self._controller(connection, admission=True)
+            if task_contract and manifest["change_class"] != "baseline":
+                for row in connection.execute("SELECT manifest FROM candidates WHERE parent IS NOT NULL"):
+                    if json.loads(row["manifest"]).get("comparison") == manifest["comparison"]:
+                        raise LedgerConflict("GameWorld comparison identities are single-candidate immutable")
             if manifest["change_class"] == "baseline":
                 if settings["champion"] is not None or manifest["parent"] is not None or model["adapter_sha256"] is not None:
                     raise LedgerConflict("Baseline is registered exactly once, without an adapter")
@@ -215,13 +222,15 @@ class CampaignController:
         if kind == "serving":
             generation = assignment.get("generation") if isinstance(assignment, dict) else None
             if (not task_contract
-                    or set(assignment) != {"training_job", "adapter_sha256", "served_model", "hypothesis", "generation"}
+                    or set(assignment) != {"training_job", "adapter_sha256", "served_model", "hypothesis",
+                                           "comparison", "generation"}
                     or not IDENTIFIER.fullmatch(assignment.get("training_job", ""))
                     or not SHA256.fullmatch(assignment.get("adapter_sha256", ""))
                     or not isinstance(assignment.get("served_model"), str)
                     or not IDENTIFIER.fullmatch(assignment["served_model"])
                     or not isinstance(assignment.get("hypothesis"), str)
                     or not assignment["hypothesis"].strip() or len(assignment["hypothesis"]) > 4000
+                    or not IDENTIFIER.fullmatch(assignment.get("comparison", ""))
                     or not isinstance(generation, dict)
                     or set(generation) != {"temperature", "top_p", "max_tokens", "response_format"}
                     or type(generation["temperature"]) not in (int, float)
@@ -248,9 +257,12 @@ class CampaignController:
             settings = split_for_controller(self.contract, assignment["split"], self.private_splits)
             axis, units = split_units(settings)
             required = {"split", "repeat"} | {name for unit in units for name in unit}
+            if task_contract:
+                required.add("comparison")
             matches = [unit for unit in units if unit[axis] == assignment.get(axis)]
             if (set(assignment) != required or len(matches) != 1
                     or any(assignment[name] != value for name, value in matches[0].items())
+                    or task_contract and not IDENTIFIER.fullmatch(assignment.get("comparison", ""))
                     or type(assignment["repeat"]) is not int
                     or not 0 <= assignment["repeat"] < settings["repeats"]):
                 raise ValueError("Episode is not registered in the frozen split")
@@ -270,6 +282,21 @@ class CampaignController:
             if materialized["state"] in ("rejected", "retired"):
                 raise BudgetRefused("Candidate no longer admits work")
             candidate_manifest = json.loads(materialized["manifest"])
+            if (task_contract and kind == "evaluation" and candidate_manifest["change_class"] != "baseline"
+                    and assignment["comparison"] != candidate_manifest["comparison"]):
+                factorial = False
+                for row in connection.execute("SELECT manifest FROM candidates WHERE parent IS NOT NULL"):
+                    comparison_manifest = json.loads(row["manifest"])
+                    if (comparison_manifest.get("change_class") == "joint"
+                            and comparison_manifest.get("comparison") == assignment["comparison"]
+                            and candidate in (comparison_manifest["parent"],
+                                              comparison_manifest["components"]["driver"],
+                                              comparison_manifest["components"]["model"],
+                                              comparison_manifest["id"])):
+                        factorial = True
+                        break
+                if not factorial:
+                    raise ValueError("GameWorld evaluation comparison differs from the candidate")
             if task_contract and kind in ("rollout", "training"):
                 if (assignment["driver_sha256"] != candidate_manifest["driver_sha256"]
                         or assignment["policy_sha256"] != candidate_manifest.get("policy_sha256")):
@@ -499,7 +526,11 @@ class CampaignController:
                 assigned = json.loads(job["specification"])["assignment"]
                 if assigned["split"] != "development":
                     continue
-                if job["state"] != "cleaned" or job["result"] is None:
+                manifest = json.loads(proposal["manifest"])
+                if (self.contract["spec"].get("assignment_kind") == "gameworld-task"
+                        and assigned.get("comparison") != manifest.get("comparison")):
+                    continue
+                if job["state"] not in ("billing_pending", "cleaned") or job["result"] is None:
                     raise LedgerConflict("Comparison still has uncleaned or missing-result jobs")
                 rows.append(json.loads(job["result"])["result"])
             result = paired_decision(self.contract, "development", rows, proposal["parent"], candidate)
@@ -533,7 +564,9 @@ class CampaignController:
                 assigned = json.loads(job["specification"])["assignment"]
                 if assigned["split"] != "development":
                     continue
-                if job["state"] != "cleaned" or job["result"] is None:
+                if assigned.get("comparison") != manifest.get("comparison"):
+                    continue
+                if job["state"] not in ("billing_pending", "cleaned") or job["result"] is None:
                     raise LedgerConflict("Factorial comparison has unfinished evaluation jobs")
                 rows.append(json.loads(job["result"])["result"])
             result = factorial_decision(self.contract, "development", rows, *candidates)

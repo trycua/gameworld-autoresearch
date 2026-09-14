@@ -8,6 +8,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import time
 
 from fps_bench.evaluation_contract import canonical, digest, exclusive_write, split_for_controller, split_units, verify
@@ -19,14 +20,18 @@ from fps_bench.qwen_baseline import endpoint, request
 from fps_bench.qwen_protocol import messages
 
 
+IDENTIFIER = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+
+
 def validate_inputs(contract, contract_hash, assignment, candidate, policy_identity, driver):
     validate_contract(contract, contract_hash)
     settings = split_for_controller(contract, assignment.get("split"))
     axis, units = split_units(settings)
     matches = [unit for unit in units if unit[axis] == assignment.get(axis)]
-    required = {"split", "repeat"} | {name for unit in units for name in unit}
+    required = {"split", "repeat", "comparison"} | {name for unit in units for name in unit}
     if (set(assignment) != required or len(matches) != 1
             or any(assignment[name] != value for name, value in matches[0].items())
+            or not IDENTIFIER.fullmatch(assignment["comparison"])
             or type(assignment["repeat"]) is not int
             or not 0 <= assignment["repeat"] < settings["repeats"]):
         raise ValueError("Candidate episode differs from the frozen task assignment")

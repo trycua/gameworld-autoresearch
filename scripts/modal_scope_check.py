@@ -72,7 +72,8 @@ class AppScopeTests(unittest.TestCase):
         asyncio.run(self.lifecycle.terminate("app-job"))
         self.assertEqual(self.backend.terminations, 1)
         job = next(job for job in self.controller.snapshot()["jobs"] if job["id"] == "app-job")
-        self.assertEqual(job["state"], "cleanup_pending")
+        self.assertEqual(job["state"], "billing_pending")
+        self.assertEqual(self.controller.recovery_actions()[0]["action"], "reconcile_provider_billing")
         holds = self.controller.snapshot()["budget"]["reservations"]
         self.assertTrue(any(hold["state"] == "held" for hold in holds))
 

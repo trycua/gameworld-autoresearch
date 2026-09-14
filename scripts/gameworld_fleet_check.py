@@ -251,7 +251,8 @@ class FleetExecutorTests(unittest.TestCase):
         controller.register_candidate(candidate)
         task = contract["public_splits"]["development"]["tasks"][0]
         assignment = {"split": "development", "task_id": task["id"], "game": task["game"],
-                      "task": task["task"], "seed": task["seed"], "repeat": 0}
+                      "task": task["task"], "seed": task["seed"], "repeat": 0,
+                      "comparison": "evaluation-one"}
         controller.admit_job("evaluation-one", "baseline", "evaluation", assignment,
                              {"modal_micro_usd": 100}, 600)
         fixture = self.home / "evaluation-fixture"

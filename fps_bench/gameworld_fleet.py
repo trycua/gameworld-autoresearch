@@ -242,6 +242,7 @@ class GameWorldFleetExecutor:
             "id": result["candidate_id"], "parent": job["candidate"], "change_class": "driver",
             "hypothesis": proposal["hypothesis"], "driver_sha256": result["driver_sha256"],
             "patch_sha256": result["patch_sha256"], "proposal_sha256": result["proposal_sha256"],
+            "comparison": proposal["id"],
             "artifact_sha256": digest(canonical(receipt)), "artifact_root": str(root.resolve()),
         }
         self.controller.register_candidate(candidate)

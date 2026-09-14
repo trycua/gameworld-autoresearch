@@ -354,10 +354,10 @@ def validate_proposal(proposal, policy, context, baseline):
                 or not 1 <= experiment["optimizer_steps"] <= policy["model"]["maximum_optimizer_steps"]):
             raise ValueError("Model trajectory or optimizer steps exceed pilot bounds")
     evaluation = experiment["evaluation_tasks"]
-    if (not isinstance(evaluation, list) or not evaluation or len(evaluation) != len(set(evaluation))
-            or not set(evaluation) <= development
+    if (not isinstance(evaluation, list) or len(evaluation) != len(set(evaluation))
+            or set(evaluation) != development
             or budget["desktop_episodes"] != len(evaluation) * policy["candidate_policy"]["development_repeats"]):
-        raise ValueError("Candidate evaluation must use the registered development tasks and repeats")
+        raise ValueError("Candidate evaluation must cover the full game-balanced development split")
     return proposal
 
 
@@ -528,12 +528,6 @@ class GameWorldResearchSupervisor:
             if deadline + 300 > settings["deadline"]:
                 raise BudgetRefused("Action leaves insufficient supervisor cleanup time")
             reservations = {}
-            if proposal["budget"]["modal_micro_usd"]:
-                reservation_id = f"gameworld:{action_id}:modal"
-                self.ledger._reserve_in_transaction(
-                    connection, reservation_id, "modal_micro_usd",
-                    proposal["budget"]["modal_micro_usd"], deadline)
-                reservations["modal_micro_usd"] = reservation_id
             connection.execute("INSERT INTO gameworld_actions VALUES (?,?,?,?,?,'dispatching',NULL,NULL,NULL)",
                                (action_id, hypothesis, kind, deadline, canonical(reservations).decode()))
             connection.execute("UPDATE gameworld_hypotheses SET state='running' WHERE id=?", (hypothesis,))

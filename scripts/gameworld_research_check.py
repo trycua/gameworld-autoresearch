@@ -107,9 +107,9 @@ class SupervisorTests(unittest.TestCase):
                 "kind": "driver",
                 "target_paths": ["cua-driver/rust/crates/platform-linux/src/input/mod.rs"],
                 "contract_tests": ["build", "focus", "held-keys", "key-release", "mouse-delivery"],
-                "evaluation_tasks": ["01_game-1--01_03"],
+                "evaluation_tasks": list(self.supervisor.context["splits"]["development"]),
             },
-            "budget": {"modal_micro_usd": 0, "litellm_tokens": 1000, "desktop_episodes": 2,
+            "budget": {"modal_micro_usd": 0, "litellm_tokens": 1000, "desktop_episodes": 68,
                        "timeout_seconds": 600},
         }
 
@@ -123,10 +123,10 @@ class SupervisorTests(unittest.TestCase):
             "experiment": {
                 "kind": "model", "objective": "grpo",
                 "training_tasks": ["02_game-2--02_01"],
-                "evaluation_tasks": ["02_game-2--02_03"],
+                "evaluation_tasks": list(self.supervisor.context["splits"]["development"]),
                 "rollouts_per_task": 2, "max_trajectory_steps": 4, "optimizer_steps": 2,
             },
-            "budget": {"modal_micro_usd": 2_000_000, "litellm_tokens": 1000, "desktop_episodes": 2,
+            "budget": {"modal_micro_usd": 2_000_000, "litellm_tokens": 1000, "desktop_episodes": 68,
                        "timeout_seconds": 600},
         }
 
@@ -200,7 +200,7 @@ class SupervisorTests(unittest.TestCase):
         self.supervisor.register(self.model_proposal())
         action = self.supervisor.begin("model-grpo", "model-action")
         self.assertEqual(action["state"], "dispatching")
-        self.assertEqual(set(json.loads(action["reservations"])), {"modal_micro_usd"})
+        self.assertEqual(json.loads(action["reservations"]), {})
         self.assertEqual(self.supervisor.recovery_actions()[0]["action"], "reconcile-provider-submission")
         self.supervisor.provider_started("model-action", "sb-provider")
         self.assertEqual(self.supervisor.recovery_actions()[0]["action"], "inspect-export-and-request-cleanup")
@@ -209,8 +209,7 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(self.supervisor.recovery_actions()[0]["action"], "release-provider-and-record-receipt")
         self.supervisor.cleanup_confirmed("model-action", "terminated-sb-provider")
         self.assertEqual(self.supervisor.recovery_actions(), [])
-        hold = self.supervisor.snapshot()["budget"]["reservations"][0]
-        self.assertEqual(hold["state"], "held")
+        self.assertEqual(self.supervisor.snapshot()["budget"]["reservations"], [])
 
     def test_reinitialize_migrates_old_actions_and_reattaches_telemetry(self):
         telemetry = self.root / "telemetry.sqlite"
