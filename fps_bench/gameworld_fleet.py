@@ -111,8 +111,14 @@ class FleetSandboxBackend:
             f"mv {shlex.quote(completion + '.tmp')} {shlex.quote(completion)}\n"
             "exit 0\n"
         )
-        launch = (f"nohup bash -c {shlex.quote(wrapped)} "
-                  f">{shlex.quote(remote_root + '/launcher.log')} 2>&1 </dev/null &")
+        launcher = (
+            "import subprocess; "
+            f"log = open({remote_root + '/launcher.log'!r}, 'ab'); "
+            f"process = subprocess.Popen(['bash', '-c', {wrapped!r}], "
+            "stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, "
+            "start_new_session=True, close_fds=True); print(process.pid)"
+        )
+        launch = "python3 -c " + shlex.quote(launcher)
         result = await sandbox.shell.run(launch, timeout=15)
         if not result.success:
             raise RuntimeError("Fleet worker wrapper did not launch")

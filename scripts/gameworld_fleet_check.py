@@ -39,7 +39,9 @@ class WorkerTransportTests(unittest.IsolatedAsyncioTestCase):
             output = Path(temporary) / "output"
             self.assertEqual(json.loads((output / "provider-result.json").read_text()), {"returncode": 7})
             self.assertEqual((output / "worker.log").read_text().strip(), "measured")
-        self.assertTrue(calls[0][0].startswith("nohup "))
+        self.assertTrue(calls[0][0].startswith("python3 -c "))
+        self.assertIn("start_new_session=True", calls[0][0])
+        self.assertIn("close_fds=True", calls[0][0])
         self.assertTrue(all(timeout <= 15 for _, timeout in calls))
         self.assertTrue(all(command.startswith("test -f ") for command, _ in calls[1:]))
 
