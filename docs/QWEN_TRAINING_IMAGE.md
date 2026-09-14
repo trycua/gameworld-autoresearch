@@ -1,9 +1,11 @@
 # Offline Qwen training image
 
-The image definition and manual GitHub Actions workflow are prepared locally.
-**No Docker build, GHCR publication, Modal image import or GPU execution has been
-verified for this new image.** Docker is unavailable in the current workspace.
-Publishing requires committing/pushing the source and dispatching the workflow.
+The first Docker build, offline container checks, GHCR publication and anonymous
+access passed in GitHub Actions run `34793067743` on September 14, 2026.
+See `docs/results/2026-09-14-qwen-training-image.md` for the digest and independent
+source/registry verification. **Modal import and GPU execution remain unverified.**
+The first image predates timestamp-enabled loss records; rebuild current source
+before using trusted controller-side loss import.
 
 ## Contents and isolation
 
@@ -58,7 +60,7 @@ is made.
   on a synthetic image; see `docs/results/2026-09-14-qwen-pretrained-cpu.md`.
   This is not a Docker or CUDA validation.
 
-These checks are not a substitute for the Docker build and offline container
-smokes. The full GPU test, authenticated source-image provenance check before
-launch, budgeted Modal image import, and real training/staging/export lifecycle
-remain pending. Keep the launch-readiness gate closed.
+The first image has now passed Docker/offline container validation, with its
+source hashes checked against the published commit. The newer timestamp-enabled
+worker image, full GPU test, budgeted Modal import, and real training/staging/export
+lifecycle remain pending. Keep the launch-readiness gate closed.

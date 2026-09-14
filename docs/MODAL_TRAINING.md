@@ -52,9 +52,10 @@ only controller-assigned hashes and bounded campaign/job identifiers. One worker
 success code does not establish artifact integrity or mark the job complete.
 The controller must export and verify artifacts before terminating the sandbox.
 
-Loss callbacks write to `/output/telemetry.sqlite` without network export. Copy
-that outbox out with the artifacts and validate/import its events into the trusted
-controller outbox before export. The
+Loss callbacks write to `/output/telemetry.sqlite` without network export. Retain
+that database as immutable evidence only; never open it in the controller.
+`import_training_losses` reconstructs events from verified result/loss artifacts
+with original timestamps into the trusted outbox; see `docs/TELEMETRY.md`. The
 worker cannot call OTel directly because its network is blocked. A local
 error-type artifact is retained for training failures. Neither a worker error
 nor a successful training run automatically discards the sandbox.
