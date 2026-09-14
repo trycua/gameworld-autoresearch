@@ -1,0 +1,78 @@
+name: Offline Qwen training image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: qwen-training-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Validate public build inputs
+        run: python3 scripts/qwen_training_image_check.py
+      - name: Choose immutable source tag
+        id: image
+        shell: bash
+        run: |
+          echo "tag=ghcr.io/${GITHUB_REPOSITORY,,}:qwen-training-sha-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build pinned worker and cache public model weights
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          file: image/Dockerfile.qwen-training
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ steps.image.outputs.tag }}
+          build-args: |
+            SOURCE_REVISION=${{ github.sha }}
+            SOURCE_URL=https://github.com/${{ github.repository }}
+      - name: Verify image offline before publication
+        env:
+          IMAGE: ${{ steps.image.outputs.tag }}
+        shell: bash
+        run: |
+          docker run --rm --network none --entrypoint python "$IMAGE" image/qwen-training/smoke.py
+          docker run --rm --network none --entrypoint python "$IMAGE" -m scripts.qwen_lora_check
+          docker run --rm --network none --entrypoint cat "$IMAGE" /app/training-image.json > training-image-source.json
+      - name: Publish tested training image
+        env:
+          IMAGE: ${{ steps.image.outputs.tag }}
+        shell: bash
+        run: |
+          docker push "$IMAGE"
+          IMAGE_REF=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE")
+          export IMAGE_REF
+          docker logout ghcr.io
+          docker pull "$IMAGE_REF"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          manifest = json.loads(Path('training-image-source.json').read_text())
+          manifest.update(image=os.environ['IMAGE_REF'], gpu_training_verified=False)
+          Path('training-image.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          PY
+          echo '### Offline training image (GPU execution still unverified)' >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$IMAGE_REF\`" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: qwen-training-image-${{ github.sha }}
+          path: training-image*.json
+          retention-days: 30

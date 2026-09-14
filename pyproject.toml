@@ -12,6 +12,8 @@ dependencies = [
 [project.optional-dependencies]
 baseline = ["pillow==11.3.0"]
 infra = ["modal==1.5.5"]
+training = ["torch==2.9.0", "torchvision==0.24.0", "transformers==4.57.1", "peft==0.17.1", "accelerate==1.10.1", "pillow==11.3.0"]
+telemetry = ["opentelemetry-proto==1.37.0", "protobuf==6.33.6"]
 
 [tool.uv]
 extra-index-url = ["https://wheels.cua.ai/simple"]

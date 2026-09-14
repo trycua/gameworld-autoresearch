@@ -20,6 +20,7 @@ import threading
 import time
 import uuid
 
+from fps_bench.evaluation_contract import canonical, digest, validate_episode_config, verify
 from fps_bench.gameworld_protocol import PROMPT, RESPONSE_FORMAT, model_messages, parse_action
 from fps_bench.qwen_baseline import ROOT, endpoint, request, sha256, source_manifest, write_json
 
@@ -180,7 +181,7 @@ async def game_environment(config: dict, output: Path, driver: str):
                     server.wait()
 
 
-async def run(config: dict, output: Path, driver: str) -> dict:
+async def run(config: dict, output: Path, driver: str, desktop_size=None) -> dict:
     from PIL import ImageGrab
     import yaml
 
@@ -204,7 +205,10 @@ async def run(config: dict, output: Path, driver: str) -> dict:
         for step in range(config["max_steps"]):
             before = await page.evaluate("window.gameAPI.getState()")
             image = output / f"{step:03d}.png"
-            ImageGrab.grab(xdisplay=os.environ.get("DISPLAY", ":1")).save(image)
+            screenshot = ImageGrab.grab(xdisplay=os.environ.get("DISPLAY", ":1"))
+            if desktop_size is not None and list(screenshot.size) != desktop_size:
+                raise RuntimeError("Desktop dimensions differ from frozen protocol")
+            screenshot.save(image)
             payload = {"model": config["served_model"], "messages": model_messages(image, history),
                        "temperature": config["temperature"], "seed": config["seed"],
                        "max_tokens": config["max_tokens"], "response_format": RESPONSE_FORMAT}
@@ -252,19 +256,49 @@ def main():
     parser = argparse.ArgumentParser(__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--driver", default="/usr/local/bin/cua-driver")
+    parser.add_argument("--config", type=Path, default=ROOT / "configs/qwen-gameworld-baseline.json")
+    parser.add_argument("--contract", type=Path)
+    parser.add_argument("--contract-sha256")
+    parser.add_argument("--expected-driver-sha256")
+    parser.add_argument("--expected-served-model")
     args = parser.parse_args()
-    config = json.loads((ROOT / "configs/qwen-gameworld-baseline.json").read_text())
+    config = validate_episode_config(json.loads(args.config.read_text()))
+    contract = None
+    home = Path(os.environ.get("GAMEWORLD_HOME", "/opt/GameWorld"))
+    guarded = [args.contract, args.contract_sha256, args.expected_driver_sha256, args.expected_served_model]
+    if any(guarded):
+        if not all(guarded):
+            parser.error("Frozen runs require contract, its controller hash, driver hash and served-model identity")
+        contract = verify(args.contract, args.contract_sha256, ROOT, home, home / "games/gameworld-games")
+        expected = {**contract["episode_template"], "seed": config["seed"], "served_model": args.expected_served_model}
+        if canonical(config) != canonical(expected):
+            raise ValueError("Episode configuration differs from frozen protocol")
+        if sha256(Path(args.driver)) != args.expected_driver_sha256:
+            raise ValueError("Driver does not match the controller's candidate identity")
     args.output.mkdir(parents=True, exist_ok=False)
     home = Path(os.environ.get("GAMEWORLD_HOME", "/opt/GameWorld"))
     manifest = {"status": "running", "started_at": datetime.now(timezone.utc).isoformat(),
-                "config": config, "source": source_manifest(), "driver_sha256": sha256(Path(args.driver)),
+                "config": config, "config_sha256": digest(canonical(config)),
+                "contract_sha256": args.contract_sha256,
+                "source": {"frozen_hashes": contract["source_hashes"]} if contract else source_manifest(),
+                "driver_sha256": sha256(Path(args.driver)),
                 "perception": "desktop screenshot and previous four responses; no evaluator state",
                 "protocol_note": "custom cua-driver visual pilot, not the upstream published benchmark harness",
                 "gameworld_revision": subprocess.check_output(["git", "-C", str(home), "rev-parse", "HEAD"]).decode().strip(),
                 "games_revision": subprocess.check_output(["git", "-C", str(home / "games/gameworld-games"), "rev-parse", "HEAD"]).decode().strip()}
+    if contract:
+        for name in ("gameworld_revision", "games_revision"):
+            if manifest[name] != contract["spec"]["provenance"][name]:
+                raise ValueError(f"Upstream revision mismatch: {name}")
     write_json(args.output / "manifest.json", manifest)
     try:
-        summary = asyncio.run(asyncio.wait_for(run(config, args.output, args.driver), config["timeout_seconds"]))
+        summary = asyncio.run(asyncio.wait_for(
+            run(config, args.output, args.driver, contract["spec"]["geometry"]["desktop"] if contract else None),
+            config["timeout_seconds"]))
+        if contract:
+            verify(args.contract, args.contract_sha256, ROOT, home, home / "games/gameworld-games")
+            if sha256(Path(args.driver)) != args.expected_driver_sha256:
+                raise ValueError("Driver identity changed during the episode")
         write_json(args.output / "summary.json", summary)
         manifest["status"] = "complete"
         print(f'METRIC score={float(summary["success"]):.4f}')

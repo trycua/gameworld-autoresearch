@@ -1,0 +1,22 @@
+FROM python:3.12.13-slim-bookworm@sha256:4766d8b510c428e595d74b9cc5bbb2fae8e26316fffb4adc89908d79aacd58a2
+
+ARG SOURCE_REVISION
+ARG SOURCE_URL
+LABEL org.opencontainers.image.source="${SOURCE_URL}" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      org.opencontainers.image.description="Offline Qwen3-VL LoRA compatibility worker, not the GameWorld desktop"
+
+ENV PYTHONUNBUFFERED=1 PYTHONPATH=/app HF_HOME=/model-cache HF_HUB_DISABLE_TELEMETRY=1 \
+    TOKENIZERS_PARALLELISM=false SOURCE_REVISION=${SOURCE_REVISION}
+WORKDIR /app
+COPY image/qwen-training/requirements.lock /app/image/qwen-training/requirements.lock
+RUN python -m pip install --no-cache-dir --require-hashes -r image/qwen-training/requirements.lock
+COPY fps_bench/__init__.py fps_bench/evaluation_contract.py fps_bench/qwen_lora.py \
+     fps_bench/training_data.py fps_bench/gameworld_protocol.py fps_bench/qwen_protocol.py \
+     fps_bench/telemetry.py /app/fps_bench/
+COPY scripts/qwen_lora_worker.py scripts/qwen_lora_check.py /app/scripts/
+COPY image/qwen-training/cache_model.py image/qwen-training/write_provenance.py \
+     image/qwen-training/smoke.py /app/image/qwen-training/
+RUN python image/qwen-training/cache_model.py && python image/qwen-training/write_provenance.py
+ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+CMD ["/bin/sleep", "1800"]

@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "suite_id": "gameworld-2048-cua-qwen-v2-pilot-1",
+  "description": "Single-task screenshot-only pilot; not the published full GameWorld benchmark",
+  "episode_config": "configs/qwen-gameworld-baseline.json",
+  "splits": {
+    "train": {
+      "count": 256,
+      "repeats": 1
+    },
+    "development": {
+      "count": 8,
+      "repeats": 2
+    },
+    "confirmation": {
+      "count": 24,
+      "repeats": 1
+    },
+    "sealed": {
+      "count": 32,
+      "repeats": 1
+    }
+  },
+  "known_pilot_seed": 42,
+  "rules": {
+    "primary": "task_success_rate",
+    "minimum_absolute_improvement": 0.125,
+    "familywise_alpha": 0.05,
+    "maximum_confirmations": 2,
+    "maximum_invalid_action_rate_increase": 0.05,
+    "maximum_median_latency_ratio": 1.5,
+    "maximum_infrastructure_failures": 0,
+    "automatic_retries": 0,
+    "sealed_uses": 1
+  },
+  "geometry": {
+    "window": [
+      1000,
+      740
+    ],
+    "viewport": [
+      980,
+      620
+    ],
+    "desktop": [
+      1024,
+      768
+    ]
+  },
+  "perception": "desktop screenshot plus previous four model responses only",
+  "driver_overlay": "unchanged from pristine v2 pilot; changes require a new baseline",
+  "provenance": {
+    "gameworld_revision": "3c26bdab436800fd61ef40543b64ca40d12c7e4a",
+    "games_revision": "55322928fa8bd51cb1719bd3807a32634aa5d3cb",
+    "image": "ghcr.io/trycua/gameworld-autoresearch@sha256:d626893f7bc3c42603557e8ae2d9fdf8ca6ce4c671c1c5958cdba2152674f7ed"
+  }
+}
