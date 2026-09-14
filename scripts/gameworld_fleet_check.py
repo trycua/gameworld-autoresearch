@@ -8,15 +8,56 @@ from pathlib import Path
 import shutil
 import tarfile
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import AsyncMock
 
 import scripts.campaign_controller_check as fixtures
 from fps_bench.campaign_controller import CampaignController
 from fps_bench.evaluation_contract import canonical, digest
-from fps_bench.gameworld_fleet import GameWorldFleetExecutor, extract_output_archive
+from fps_bench.gameworld_fleet import FleetSandboxBackend, GameWorldFleetExecutor, extract_output_archive
 from fps_bench.gameworld_grpo import policy_digest, reward_components
 from fps_bench.gameworld_research import load_policy
 from fps_bench.gameworld_training import GameWorldTrainingRegistry
+
+
+class WorkerTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_worker_uses_short_launch_and_completion_requests(self):
+        calls = []
+
+        async def run(command, timeout):
+            calls.append((command, timeout))
+            process = await asyncio.create_subprocess_exec(
+                "bash", "-c", command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, stderr = await asyncio.wait_for(process.communicate(), 1)
+            return SimpleNamespace(success=process.returncode == 0, returncode=process.returncode,
+                                   stdout=stdout.decode(), stderr=stderr.decode())
+
+        with tempfile.TemporaryDirectory() as temporary:
+            sandbox = SimpleNamespace(shell=SimpleNamespace(run=run))
+            await FleetSandboxBackend().run(sandbox, temporary, "sleep 1.2; echo measured; exit 7", 5)
+            output = Path(temporary) / "output"
+            self.assertEqual(json.loads((output / "provider-result.json").read_text()), {"returncode": 7})
+            self.assertEqual((output / "worker.log").read_text().strip(), "measured")
+        self.assertTrue(calls[0][0].startswith("nohup "))
+        self.assertTrue(all(timeout <= 15 for _, timeout in calls))
+        self.assertTrue(all(command.startswith("test -f ") for command, _ in calls[1:]))
+
+    async def test_worker_timeout_is_recorded_and_launch_failure_is_not_polled(self):
+        async def run(command, timeout):
+            process = await asyncio.create_subprocess_exec("bash", "-c", command)
+            await process.wait()
+            return SimpleNamespace(success=process.returncode == 0, returncode=process.returncode)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            sandbox = SimpleNamespace(shell=SimpleNamespace(run=run))
+            await FleetSandboxBackend().run(sandbox, temporary, "sleep 10", 1)
+            result = json.loads((Path(temporary) / "output/provider-result.json").read_text())
+            self.assertEqual(result, {"returncode": 124})
+        shell = SimpleNamespace(run=AsyncMock(return_value=SimpleNamespace(success=False)))
+        with self.assertRaisesRegex(RuntimeError, "did not launch"):
+            await FleetSandboxBackend().run(SimpleNamespace(shell=shell), "/unused", "true", 1)
+        self.assertEqual(shell.run.await_count, 1)
 
 
 class FakeLifecycle:

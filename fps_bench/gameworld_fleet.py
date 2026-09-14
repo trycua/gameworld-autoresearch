@@ -1,5 +1,6 @@
 """Trusted Fleet execution for GameWorld driver builds and interactive rollouts."""
 
+import asyncio
 import io
 import json
 from pathlib import Path, PurePosixPath
@@ -94,18 +95,36 @@ class FleetSandboxBackend:
             await sandbox.files.write_bytes(f"{remote_root}/{name}", data)
 
     async def run(self, sandbox, remote_root, command, timeout):
+        if type(timeout) is not int or timeout <= 0:
+            raise ValueError("Fleet worker timeout must be a positive integer")
+        completion = remote_root + "/output/provider-result.json"
+        worker_log = remote_root + "/worker.log"
         wrapped = (
             "set +e\n"
-            f"{command}\n"
+            f"timeout --kill-after=5s {timeout}s bash -c {shlex.quote(command)} "
+            f">{shlex.quote(worker_log)} 2>&1\n"
             "worker_rc=$?\n"
             f"mkdir -p {shlex.quote(remote_root + '/output')}\n"
+            f"mv {shlex.quote(worker_log)} {shlex.quote(remote_root + '/output/worker.log')}\n"
             f"printf '{{\"returncode\":%s}}\\n' \"$worker_rc\" > "
-            f"{shlex.quote(remote_root + '/output/provider-result.json')}\n"
+            f"{shlex.quote(completion + '.tmp')} && "
+            f"mv {shlex.quote(completion + '.tmp')} {shlex.quote(completion)}\n"
             "exit 0\n"
         )
-        result = await sandbox.shell.run(wrapped, timeout=timeout)
+        launch = (f"nohup bash -c {shlex.quote(wrapped)} "
+                  f">{shlex.quote(remote_root + '/launcher.log')} 2>&1 </dev/null &")
+        result = await sandbox.shell.run(launch, timeout=15)
         if not result.success:
-            raise RuntimeError("Fleet worker wrapper did not complete")
+            raise RuntimeError("Fleet worker wrapper did not launch")
+        deadline = time.monotonic() + timeout + 15
+        while time.monotonic() < deadline:
+            result = await sandbox.shell.run(f"test -f {shlex.quote(completion)}", timeout=10)
+            if result.success:
+                return
+            if result.returncode != 1:
+                raise RuntimeError("Fleet worker completion probe failed")
+            await asyncio.sleep(min(2, max(0, deadline - time.monotonic())))
+        raise TimeoutError("Fleet worker did not publish completion within its bound")
 
     async def collect(self, sandbox, remote_root, output, maximum):
         archive = remote_root + ".tar.gz"
