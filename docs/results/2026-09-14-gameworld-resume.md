@@ -128,3 +128,67 @@ The metered research relay passed its four-model preflight without an inference
 request. It must be restarted against the next canonical ledger before launch.
 The bounded baseline helper is `/tmp/gameworld-live-baseline-v6.py`; retain the
 normalized `split_units` assignments when adapting its custody and campaign IDs.
+
+## First complete non-2048 episode and measured launch adjustments
+
+Workflow `34874772576` passed its actual computer-server HTTP smoke test and
+published source `366d0fe` as
+`sha256:03b7f119165360a2c2657a9fde0fa6115d25d6473146e61f426567df12d1ef30`.
+Terraform deployed it, and custody `20260914-366d0fe-v6` was frozen with anchor
+`54d23c8ee2a53f9419860b064d9dbaa98459b184ebc6cbceb69ce4eb5cf6dc34`.
+The broad prelaunch regression passed 92 Python tests (one further test skipped)
+and four JavaScript tests.
+
+At 18:00 UTC the v4 serving obligation was reconciled: $0.189836 observed and
+$10 retained. Accounting was forked to `campaign-v5.sqlite` with commitment
+unchanged at $271.013141. An initial Fleet preflight returned HTTP 503 before
+any job admission; the next read-only preflight recovered.
+
+The v8 episode then completed the registered development task
+`02_another-gentlemans-adventure--02_03` in 103.104659 seconds:
+
+- 60 steps: 37 `move_right`, 21 `move_left`, one `jump`, one `wait`.
+- Zero invalid actions and zero driver errors.
+- Task success false, progress zero. This is measured failure evidence, not an
+  improvement or promotion.
+- 63,662 prompt tokens and 718 completion tokens from local Qwen serving.
+
+The original host verifier rejected the wrapper's extra root-level `worker.log`.
+Commit `ab7a367` moves transport-only logs into `transport/`, outside the frozen
+scientific artifact inventory, and tests the full executor/verifier combination.
+The evaluator itself is unchanged. An immutable replay projection of the captured
+bundle moved only that log, retained all scientific hashes, and passed the exact
+original verifier. The original controller result was not rewritten. No GPU was
+needed for replay. Verified-replay metrics/logs reached OTel with zero pending logs.
+Evidence: `vertical-slices/baseline-non2048-v8/replay/verification.json`.
+
+The first real Pi browser-research attempt consumed 105,931 authenticated tokens
+and stopped at its 100,000-token workflow budget before completing synthesis.
+There is no registered proposal from that attempt. Commit `e00c215` raises that
+bounded workflow allowance to 500,000; the shared one-billion-token limit remains.
+
+The observed 103-second episode also makes a one-hour source-serving lease too
+short for a simple 136-episode, two-desktop projection (about 117 minutes before
+startup/contention). Commit `64d0fc4` sets a three-hour maximum and $15 minimum
+serving reservation, with refreshed quote validation. The six-hour campaign,
+two-desktop/one-training-job concurrency, $1,800 normal allowance, $200 cleanup
+reserve, and $2,000 total cap are unchanged. All focused policy/coordinator/SFT/
+serving/runner/research/billing/evaluation checks passed.
+
+Builds for `64d0fc4`:
+- Fleet: `34880037813`.
+- Authenticated offline training image: `34880036922` (must import and pin it;
+  the older training image embeds the older strict serving policy).
+
+All claims and the serving sandbox are cleaned up. The v5 $10 serving obligation
+is billing-pending for 18:00-19:00 UTC; a one-shot trusted reconciliation process
+waits until 19:00:05 UTC (`/tmp/gameworld-reconcile-v5-at-1900.py`, output
+`/tmp/gameworld-v5-billing-1900.log`). Current commitment is $281.013141 and
+105,931 LiteLLM tokens. The completed slice watchdog and old-protocol research
+relay are stopped. The source/policy changes supersede v6 custody; retain it.
+
+Next: reconcile/fork v5 accounting, deploy/freeze the latest Fleet image, import
+the current training image, and run the driver/model validation slices before
+the bounded joint campaign. Do not spend on another unchanged standalone
+baseline just to re-prove the captured episode; use the first paired parent
+evaluation to verify the corrected live artifact packaging.
