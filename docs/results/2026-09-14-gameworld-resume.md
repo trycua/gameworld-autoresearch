@@ -48,3 +48,39 @@ Durable receipts are under
 `/home/node/.local/state/gameworld-autoresearch/campaigns/gameworld-joint-20260913/`:
 `billing/v2-completed-20260914-1632`, `campaign-v3-fork.json`, and
 `vertical-slices/fleet-7c465c7-v3`.
+
+## Subsequent live validation
+
+Workflow `34869776324` passed. Terraform deployed the corrected image
+`sha256:b399c4f404b2b67abd70bed2e88343f606dbae1d53d79edc687757d8eb094000`.
+The new immutable contract is `20260914-ad95277-v4`, anchored at
+`c5406b5d14dcd276b7f2a02e431eb79c6b9b7b1dc6981b8e6d5bec58715665cd`.
+
+Source Qwen serving became healthy in two controller-owned GPU launches. The
+first validation helper incorrectly submitted catalog `id` rather than the
+normalized `task_id`; admission rejected it before any evaluation dispatch.
+The helper was corrected to use `split_units` and admit the assignment before
+GPU allocation. This was a helper defect, not a model or evaluator failure.
+
+The next attempt dispatched the non-2048 development task
+`02_another-gentlemans-adventure--02_03`, but the synchronous Fleet shell request
+failed with `SdkError.Transport: ReadTimeout`. No complete benchmark artifact
+was exported. Claim release and both GPU terminations were confirmed, with
+successful cleanup telemetry exports. These attempts are not scored results.
+
+Commit `c3c09b8` replaces the long HTTP shell call with a detached, remotely
+time-bounded worker and short completion probes. Atomic completion receipts
+retain the worker exit code; worker logs are included in exported artifacts.
+Local subprocess tests cover launch latency, nonzero worker exit, enforced
+timeout, and launch failure. Fleet and runner tests pass. Workflow
+`34872017224` builds the corrected image. This source change supersedes the
+v4 contract; retain it rather than modifying its trust anchor.
+
+At 17:00 UTC the canonical automatic reconciler closed both serving jobs for
+the 16:00-17:00 window: $0.321535 observed, $20 retained, no refund. All v3 jobs
+are cleaned. Total inherited commitment is now $261.013141, leaving
+$1,538.986859 normal allowance plus the untouched $200 cleanup reserve.
+
+Next: publish/apply the transport-fix image, fork terminal v3 accounting,
+freeze a new contract, and repeat the bounded non-2048 vertical slice. The
+driver/model validation and full joint campaign remain uncompleted.
