@@ -60,13 +60,13 @@ test('installed pi loads the workflow, routing extension and research instructio
   assert.ok(loader.getAgentsFiles().agentsFiles.some((file) => file.content.includes('GameWorld research supervisor')));
 });
 
-test('campaign tokens and Modal dollars are separate, explicitly pending gates', async () => {
+test('campaign tokens and Modal dollars use separate controller gates', async () => {
   const limits = await readConfig('research-limits.json');
   assert.equal(limits.litellm.total_token_limit, 1000000000);
   assert.equal(limits.litellm.scope, 'campaign');
   assert.equal(limits.litellm.dollar_budget, null);
   assert.equal(limits.modal.spending_cap_usd, 2000);
   assert.equal(limits.modal.normal_work_allowance_usd + limits.modal.shutdown_reserve_usd, 2000);
-  assert.equal(limits.litellm.enforcement_status, 'pending_shared_coordinator_ledger');
-  assert.equal(limits.modal.enforcement_status, 'pending_shared_coordinator_ledger');
+  assert.equal(limits.litellm.enforcement_status, 'controller_gateway_reservations_pending_provider_reconciliation');
+  assert.equal(limits.modal.enforcement_status, 'campaign_controller_reservations_pending_live_reconciliation');
 });

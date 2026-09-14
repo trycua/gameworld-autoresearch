@@ -32,11 +32,14 @@ cost gates or mistake its zero-priced usage counters for a Modal budget ledger.
 The approved LiteLLM campaign limit is 1,000,000,000 total input plus output tokens
 across all four aliases, including cached input once and retries. It is not a
 per-minute or per-workflow allowance. See configs/pi/research-limits.json. The
-shared cumulative ledger is pending; per-workflow limits do not enforce that cap.
+local research gateway reserves requests in the canonical campaign ledger;
+per-workflow limits alone do not enforce that cap. Final provider-usage settlement
+and retry reconciliation are still required before production admission.
 Token/concurrency/time limits here are operational bounds, not USD enforcement.
-The aggregate Modal budget gate is not implemented yet: do not launch paid Modal
-jobs, a benchmark campaign or an unattended optimization loop from this profile.
-Research produces proposals only until the coordinator's launch controls exist.
+The campaign controller owns aggregate Modal reservations, but authenticated live
+billing reconciliation is still a launch gate. Do not launch paid Modal jobs or an
+unattended optimization loop from the interactive profile itself. The credentialed
+GameWorld runner is the only component allowed to execute proposals.
 Never change evaluator/held-out splits, publish branches/images, provision Fleet,
 or access credentials to carry out research. This prompt is not an OS sandbox:
 research workers execute in the host process; deployment isolation is separate work.

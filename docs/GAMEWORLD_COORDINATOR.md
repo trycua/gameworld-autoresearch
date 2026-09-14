@@ -49,10 +49,26 @@ preserves queues and does not duplicate jobs.
 It consumes stable job IDs, resumes `dispatching`, `running` and `cleanup_pending`
 work without blind resubmission, invokes Fleet build/rollout/evaluation adapters,
 performs Modal SFT/GRPO stage-run-export-cleanup, keeps model serving alive through
-isolated and factorial evaluation, and terminates it after the decision. Baseline
+isolated and factorial evaluation, and terminates it after the decision. Model
+proposals carry exact training and serving reservation splits, so no operator can
+choose a different allocation after proposal approval. Baseline
 credentials come from `QWEN_BASE_URL` and `QWEN_API_KEY`; an optional
 `QWEN_CANDIDATE_API_KEY` isolates candidate endpoints. No secret is written to the
 ledger.
+
+With `--enable-research`, the runner invokes the isolated Pi research profile when
+the campaign is idle. Browser-verified sources feed one schema-constrained
+proposal, and driver proposals receive a second schema-constrained patch pass over
+only their approved source bytes. The child environment excludes Fleet, Modal,
+Qwen and GitHub credentials. Attempts and output hashes are durable; three
+consecutive failures freeze the campaign. Model proposals default to GRPO unless
+`--sft-source-catalog` names trusted, already-custodied SFT datasets.
+
+The SFT catalog has schema version 1 and a `sources` array. Each source contains
+`id`, `tasks`, `dataset_root`, `dataset_sha256` and `source_receipt`. Paths stay in
+the trusted runner; researchers receive only the source ID, task IDs and hashes.
+The authenticated SFT registry re-verifies the selected dataset before any Modal
+job is admitted.
 
 Use one bounded pass during supervised bring-up, then `run` only with the
 independent watchdog active:
@@ -69,7 +85,8 @@ PYTHONPATH=. python3 -m fps_bench.gameworld_runner once \
   --training-app gameworld-training --training-app-id "$TRAINING_APP_ID" \
   --training-image-id "$TRAINING_IMAGE_ID" \
   --serving-app gameworld-serving --serving-app-id "$SERVING_APP_ID" \
-  --serving-image-id "$SERVING_IMAGE_ID"
+  --serving-image-id "$SERVING_IMAGE_ID" \
+  --enable-research --sft-source-catalog /trusted/sft-sources.json
 ```
 
 Validation:
@@ -77,11 +94,14 @@ Validation:
 ```bash
 PYTHONPATH=. .venv/bin/python scripts/gameworld_coordinator_check.py
 PYTHONPATH=. .venv/bin/python scripts/gameworld_runner_check.py
+PYTHONPATH=. .venv/bin/python scripts/gameworld_research_worker_check.py
+node --test tools/pi/gameworld-proposal.test.mjs
 ```
 
 The offline checks cover driver/GRPO routing, the full 34-game paired and factorial
-queue sizes, comparison isolation, model budget allocation, failed-rollout
-rejection, authenticated SFT training/serving and restart idempotency. They do not
+queue sizes, comparison isolation, explicit model budget ownership, failed-rollout
+rejection, authenticated SFT training/serving, proposal/patch materialization,
+credential filtering and restart idempotency. They do not
 constitute a live Fleet or Modal campaign. Remaining gates are current image/
 contract publication, production watchdog deployment, live billing reconciliation,
 private split leases, promotion/rollback and bounded real vertical slices.

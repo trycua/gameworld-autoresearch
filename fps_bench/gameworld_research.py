@@ -307,7 +307,9 @@ def validate_proposal(proposal, policy, context, baseline):
         raise ValueError("Proposal repeats a research source")
     budget = proposal["budget"]
     if (not isinstance(budget, dict)
-            or set(budget) != {"modal_micro_usd", "litellm_tokens", "desktop_episodes", "timeout_seconds"}
+            or set(budget) != {"modal_micro_usd", "modal_training_micro_usd",
+                               "modal_serving_micro_usd", "litellm_tokens",
+                               "desktop_episodes", "timeout_seconds"}
             or any(type(value) is not int or value < 0 for value in budget.values())
             or not 1 <= budget["desktop_episodes"] <= 136
             or budget["litellm_tokens"] == 0
@@ -320,7 +322,9 @@ def validate_proposal(proposal, policy, context, baseline):
     if proposal["track"] == "driver":
         if (not isinstance(experiment, dict)
                 or set(experiment) != {"kind", "target_paths", "contract_tests", "evaluation_tasks"}
-                or experiment["kind"] != "driver" or budget["modal_micro_usd"] != 0):
+                or experiment["kind"] != "driver"
+                or any(budget[name] != 0 for name in (
+                    "modal_micro_usd", "modal_training_micro_usd", "modal_serving_micro_usd"))):
             raise ValueError("Driver proposal changed the model budget or schema")
         paths = experiment["target_paths"]
         if not isinstance(paths, list) or not 1 <= len(paths) <= 8 or len(paths) != len(set(paths)):
@@ -334,10 +338,14 @@ def validate_proposal(proposal, policy, context, baseline):
             raise ValueError("Driver proposal must retain every input contract test")
     else:
         expected = {"kind", "objective", "training_tasks", "evaluation_tasks", "rollouts_per_task",
-                    "max_trajectory_steps", "optimizer_steps"}
+                    "max_trajectory_steps", "optimizer_steps", "sft_source_id"}
         if not isinstance(experiment, dict) or set(experiment) != expected or experiment["kind"] != "model":
             raise ValueError("Unexpected model experiment schema")
-        if experiment["objective"] not in policy["model"]["objectives"] or budget["modal_micro_usd"] == 0:
+        if (experiment["objective"] not in policy["model"]["objectives"]
+                or budget["modal_training_micro_usd"] <= 0
+                or budget["modal_serving_micro_usd"] <= 0
+                or budget["modal_micro_usd"] != (
+                    budget["modal_training_micro_usd"] + budget["modal_serving_micro_usd"])):
             raise ValueError("Model objective requires a bounded Modal reservation")
         training = experiment["training_tasks"]
         if (not isinstance(training, list) or not training or len(training) != len(set(training))
@@ -348,6 +356,11 @@ def validate_proposal(proposal, policy, context, baseline):
         maximum = 1 if experiment["objective"] == "sft" else policy["model"]["maximum_grpo_group_size"]
         if type(group) is not int or not minimum <= group <= maximum:
             raise ValueError("Rollout group size differs from the selected objective")
+        source_id = experiment["sft_source_id"]
+        if ((experiment["objective"] == "sft" and not isinstance(source_id, str))
+                or (isinstance(source_id, str) and not IDENTIFIER.fullmatch(source_id))
+                or (experiment["objective"] == "grpo" and source_id is not None)):
+            raise ValueError("SFT source identity differs from the selected objective")
         if (type(experiment["max_trajectory_steps"]) is not int
                 or not 1 <= experiment["max_trajectory_steps"] <= policy["model"]["maximum_trajectory_steps"]
                 or type(experiment["optimizer_steps"]) is not int

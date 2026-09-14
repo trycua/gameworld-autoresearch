@@ -109,8 +109,9 @@ class SupervisorTests(unittest.TestCase):
                 "contract_tests": ["build", "focus", "held-keys", "key-release", "mouse-delivery"],
                 "evaluation_tasks": list(self.supervisor.context["splits"]["development"]),
             },
-            "budget": {"modal_micro_usd": 0, "litellm_tokens": 1000, "desktop_episodes": 68,
-                       "timeout_seconds": 600},
+            "budget": {"modal_micro_usd": 0, "modal_training_micro_usd": 0,
+                       "modal_serving_micro_usd": 0, "litellm_tokens": 1000,
+                       "desktop_episodes": 68, "timeout_seconds": 600},
         }
 
     def model_proposal(self, identity="model-grpo"):
@@ -125,8 +126,12 @@ class SupervisorTests(unittest.TestCase):
                 "training_tasks": ["02_game-2--02_01"],
                 "evaluation_tasks": list(self.supervisor.context["splits"]["development"]),
                 "rollouts_per_task": 2, "max_trajectory_steps": 4, "optimizer_steps": 2,
+                "sft_source_id": None,
             },
-            "budget": {"modal_micro_usd": 10_000_000, "litellm_tokens": 1000, "desktop_episodes": 68,
+            "budget": {"modal_micro_usd": 10_000_000,
+                       "modal_training_micro_usd": 5_000_000,
+                       "modal_serving_micro_usd": 5_000_000,
+                       "litellm_tokens": 1000, "desktop_episodes": 68,
                        "timeout_seconds": 600},
         }
 
@@ -159,6 +164,21 @@ class SupervisorTests(unittest.TestCase):
     def test_training_and_evaluation_splits_are_enforced(self):
         proposal = self.model_proposal()
         proposal["experiment"]["training_tasks"] = ["02_game-2--02_03"]
+        with self.assertRaises(ValueError):
+            self.supervisor.register(proposal)
+
+    def test_model_modal_split_and_sft_source_are_explicit(self):
+        proposal = self.model_proposal("bad-modal-split")
+        proposal["budget"]["modal_training_micro_usd"] -= 1
+        with self.assertRaises(ValueError):
+            self.supervisor.register(proposal)
+        proposal = self.model_proposal("grpo-with-sft-source")
+        proposal["experiment"]["sft_source_id"] = "unexpected-source"
+        with self.assertRaises(ValueError):
+            self.supervisor.register(proposal)
+        proposal = self.model_proposal("sft-without-source")
+        proposal["experiment"]["objective"] = "sft"
+        proposal["experiment"]["rollouts_per_task"] = 1
         with self.assertRaises(ValueError):
             self.supervisor.register(proposal)
         proposal = self.model_proposal("sealed-eval")

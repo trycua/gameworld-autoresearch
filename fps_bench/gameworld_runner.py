@@ -13,6 +13,7 @@ from fps_bench.fleet_provider import FleetLifecycle
 from fps_bench.gameworld_coordinator import GameWorldCoordinator
 from fps_bench.gameworld_fleet import GameWorldFleetExecutor
 from fps_bench.gameworld_modal import GameWorldModalTrainingLifecycle, GameWorldTrainingArtifacts
+from fps_bench.gameworld_research_worker import GameWorldResearchWorker
 from fps_bench.gameworld_serving import GameWorldServingLifecycle
 
 
@@ -25,7 +26,7 @@ MODAL_FIELDS = {
 class GameWorldProviderRunner:
     def __init__(self, coordinator, modal_config, qwen_environment, *, candidate_api_key=None,
                  fleet_lifecycle=None, fleet_executor=None, training_lifecycle=None,
-                 training_artifacts=None, serving_lifecycle=None):
+                 training_artifacts=None, serving_lifecycle=None, research_worker=None):
         self.coordinator = coordinator
         self.controller = coordinator.controller
         if not isinstance(modal_config, dict) or set(modal_config) != MODAL_FIELDS:
@@ -51,6 +52,7 @@ class GameWorldProviderRunner:
         self.training_artifacts = training_artifacts or GameWorldTrainingArtifacts(self.training)
         self.serving = serving_lifecycle or GameWorldServingLifecycle(
             self.controller, coordinator.state_root / "serving")
+        self.research = research_worker
 
     def _workflow(self, proposal_id):
         return self.coordinator.workflow(proposal_id)
@@ -256,6 +258,10 @@ class GameWorldProviderRunner:
             self.controller.stop("Three consecutive provider runner failures")
         return True
 
+    def admission_blocked(self):
+        snapshot = self.controller.snapshot()
+        return snapshot["controller"]["stopped"] or snapshot["budget"]["campaign"]["frozen"]
+
     def start_joint_if_ready(self):
         snapshot = self.coordinator.snapshot()
         if any(row["track"] == "joint" for row in snapshot["workflows"]):
@@ -293,14 +299,19 @@ class GameWorldProviderRunner:
 
     async def run_once(self, maximum=2):
         failure_gate = self.stop_after_durable_failures()
+        admission_blocked = failure_gate or self.admission_blocked()
         transitions = self.coordinator.advance()
-        joint = None if failure_gate else self.start_joint_if_ready()
+        joint = None if admission_blocked else self.start_joint_if_ready()
         if joint is not None:
             transitions.append({"workflow": joint["proposal_id"], "state": joint["state"]})
+        research = ([] if admission_blocked or self.research is None
+                    else await self.research.materialize_required())
+        transitions.extend(self.coordinator.advance())
         cleanup = await self.terminate_due_serving()
         transitions.extend(self.coordinator.advance())
-        admitted = [] if failure_gate else self.coordinator.admit_ready(maximum)
-        runnable = [] if failure_gate else self.coordinator.runnable()[:maximum]
+        admission_blocked = admission_blocked or self.admission_blocked()
+        admitted = [] if admission_blocked else self.coordinator.admit_ready(maximum)
+        runnable = [] if admission_blocked else self.coordinator.runnable()[:maximum]
         events = await asyncio.gather(*(self.safe_dispatch(row) for row in runnable)) if runnable else []
         transitions.extend(self.coordinator.advance())
         self.stop_after_durable_failures()
@@ -311,6 +322,7 @@ class GameWorldProviderRunner:
                 self.coordinator.supervisor.telemetry, f"runner-accounting-{event_count}")
             telemetry = self.coordinator.supervisor.telemetry.flush() if recorded else {"recorded": False}
         return {"transitions": transitions, "admitted": admitted, "dispatch": events, "cleanup": cleanup,
+                "research": research,
                 "required_actions": self.coordinator.required_actions(), "telemetry": telemetry}
 
     async def run_until_idle(self, maximum=2, max_cycles=10000):
@@ -320,13 +332,22 @@ class GameWorldProviderRunner:
         for _ in range(max_cycles):
             result = await self.run_once(maximum)
             history.append(result)
-            if result["dispatch"] or result["cleanup"] or result["transitions"] or result["admitted"]:
+            if (result["dispatch"] or result["cleanup"] or result["transitions"]
+                    or result["admitted"] or result["research"]):
                 continue
+            controller = self.controller.snapshot()
+            if controller["controller"]["stopped"] or controller["budget"]["campaign"]["frozen"]:
+                break
             proposal = self.coordinator.supervisor.next()
             if proposal is not None:
                 action = "action-" + digest(canonical(proposal["id"]))[:24]
                 self.coordinator.start_next(action)
                 continue
+            if self.research is not None:
+                generated = await self.research.propose()
+                if generated is not None:
+                    history[-1]["research"].append(generated)
+                    continue
             break
         else:
             raise RuntimeError("Runner cycle bound exhausted")
@@ -351,6 +372,8 @@ def main():
     parser.add_argument("--campaign", required=True)
     parser.add_argument("--pool", default="gameworld-autoresearch")
     parser.add_argument("--telemetry", type=Path)
+    parser.add_argument("--enable-research", action="store_true")
+    parser.add_argument("--sft-source-catalog", type=Path)
     for name in sorted(MODAL_FIELDS):
         parser.add_argument("--" + name.replace("_", "-"), required=True)
     parser.add_argument("--maximum", type=int, default=2)
@@ -362,9 +385,12 @@ def main():
         args.database, args.contract, args.contract_sha256, args.baseline, args.state_root,
         args.policy, args.catalog, args.telemetry, args.pool)
     coordinator.initialize(args.campaign, args.baseline_policy)
+    research = (GameWorldResearchWorker(
+        coordinator, args.state_root / "research", sft_source_catalog=args.sft_source_catalog)
+                if args.enable_research else None)
     runner = GameWorldProviderRunner(
         coordinator, modal_config(args), qwen,
-        candidate_api_key=os.environ.get("QWEN_CANDIDATE_API_KEY"))
+        candidate_api_key=os.environ.get("QWEN_CANDIDATE_API_KEY"), research_worker=research)
     if args.operation == "once":
         result = asyncio.run(runner.run_once(args.maximum))
     else:

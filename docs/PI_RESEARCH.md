@@ -107,26 +107,50 @@ packages; an integration test verifies command registration and context loading.
 - **Modal: USD 2,000**, with USD 1,800 for normal admission and USD 200 reserved for
   shutdown/delayed charges, focused on training and inference plus associated costs.
 
-Aggregate enforcement is still pending in the research coordinator. The gateway
-key schema exposes token-rate limits and dollar budgets, not a cumulative token
-quota. Pi's per-workflow token budget does not include every parent session or
-other workflow. Do not confuse either with the 1-billion-token campaign gate.
+The local gateway reserves every admitted request against the canonical
+1-billion-token campaign ledger and freezes the campaign when final usage is
+ambiguous. Pi's per-workflow token budget still does not include every parent
+session or other workflow, so it is not the campaign gate. Successful request
+holds remain reserved until authenticated upstream usage and retry reconciliation
+settle them; production gateway startup therefore remains disabled by default.
 LiteLLM reports zero token prices for these aliases; its dollar counter is not the
-Modal cost ledger. No unattended campaign should launch until shared reservation,
-reconciliation and shutdown controls are implemented and tested.
+Modal cost ledger. Modal training and serving reservations are owned by the
+campaign controller, but no unattended campaign should launch until live provider
+reconciliation and shutdown behavior are verified.
+
+## Campaign integration
+
+`fps_bench.gameworld_research_worker` connects this profile to the durable
+GameWorld coordinator. When `fps_bench.gameworld_runner` is started with
+`--enable-research`, an idle campaign runs bounded browser-backed research, asks
+Astra for one structured proposal, validates it against the frozen baseline and
+registers its immutable bytes. Driver proposals then use Sol to produce only an
+ASCII unified diff over the approved source files; the Fleet worker still performs
+`git apply --check`, rebuilds the bundled driver and runs every input contract.
+
+The subprocess receives `GAMEWORLD_RESEARCH_TOKEN` and an optional
+`GAMEWORLD_SEARXNG_URL`, but not Fleet, Modal, Qwen or GitHub credentials. Each
+proposal and patch attempt has a durable context, output hash and terminal state
+in the canonical ledger. Three consecutive research-worker failures stop and
+freeze the campaign. SFT proposals are exposed only when the trusted runner is
+given an authenticated source catalog; otherwise model research is constrained to
+GRPO.
 
 ## Validation
 
 ```bash
 node tools/pi/setup.mjs
-node --test tools/pi/research.test.mjs
+node --test tools/pi/research.test.mjs tools/pi/browser-research.test.mjs \
+  tools/pi/gameworld-proposal.test.mjs
+.venv/bin/python scripts/gameworld_research_worker_check.py
 scripts/pi_research.sh --list-models cua-litellm
 ```
 
 The first two commands make no model inference calls. Listing models checks local
 registration/auth presence, not inference availability. Before the metered-relay migration on September 13, all four aliases returned `READY` through pi in bounded live
 smokes; the gateway reported its `*-backup-2` routes. A separate full-profile Luna
-smoke also returned `READY`. Six local configuration/integration tests pass.
+smoke also returned `READY`. Twenty-two offline Node checks now cover the profile,
+browser workflow and structured GameWorld proposal bridge.
 The package's direct recipe fetch returned HTTP 200, but its Bing search smoke
 parsed zero results despite HTTP 200. Search reliability remains a known limitation;
 no complete deep-research workflow or training campaign was run.

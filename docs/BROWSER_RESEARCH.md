@@ -110,15 +110,16 @@ Defaults in `configs/pi/browser-research.json`:
 - Two gathering workers at most; four-to-five total agents per workflow.
 - 24 browser calls and three search calls per gathering worker.
 - Three minutes per worker, ten minutes per workflow, zero automatic agent retries.
-- 100,000 tokens per workflow; these local bounds do not enforce the separate
-  1-billion-token campaign limit or the USD 2,000 Modal limit.
+- 100,000 tokens per workflow; the local gateway separately reserves requests
+  against the 1-billion-token campaign ledger. It does not meter Modal dollars.
 
 ## Artifacts and tests
 
 Each run writes `manifest.json`, `events.jsonl`, and `result.json` or `error.json`
 under `results/runs/`. Events include source URLs, browser text, provider token
 usage, model-role selection and browser cleanup. Treat raw artifacts as sensitive;
-they are gitignored. This implementation does not yet emit the events to OTel.
+they are gitignored. Integrated proposal/patch attempts emit aggregate OTel
+success, failure and duration metrics, but raw browser events remain local.
 
 ```bash
 node --test tools/pi/browser-research.test.mjs tools/pi/research.test.mjs

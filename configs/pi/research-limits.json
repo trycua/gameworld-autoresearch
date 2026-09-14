@@ -7,13 +7,13 @@
     "accounting": "prompt_tokens + completion_tokens; include cached prompt tokens once; include failed and retried requests when usage is available",
     "reset": "explicit user approval only",
     "dollar_budget": null,
-    "enforcement_status": "pending_shared_coordinator_ledger"
+    "enforcement_status": "controller_gateway_reservations_pending_provider_reconciliation"
   },
   "modal": {
     "spending_cap_usd": 2000,
     "normal_work_allowance_usd": 1800,
     "shutdown_reserve_usd": 200,
     "scope": "campaign training and inference, including storage and idle/cooldown charges",
-    "enforcement_status": "pending_shared_coordinator_ledger"
+    "enforcement_status": "campaign_controller_reservations_pending_live_reconciliation"
   }
 }

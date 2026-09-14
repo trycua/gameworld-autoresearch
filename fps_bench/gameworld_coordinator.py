@@ -165,6 +165,11 @@ class GameWorldCoordinator:
         action = self.supervisor.begin(proposal["id"], action_id)
         self.supervisor.provider_started(action_id, "coordinator:" + action_id)
         details = {"proposal_sha256": digest(canonical(proposal))}
+        if proposal["track"] == "model":
+            details["modal_allocation"] = {
+                "training_micro_usd": proposal["budget"]["modal_training_micro_usd"],
+                "serving_micro_usd": proposal["budget"]["modal_serving_micro_usd"],
+            }
         state = "awaiting_patch" if proposal["track"] == "driver" else (
             "collecting_rollouts" if proposal["experiment"]["objective"] == "grpo" else "awaiting_sft_dataset")
         with self.controller.ledger.transaction() as connection:
@@ -289,8 +294,12 @@ class GameWorldCoordinator:
                 "collecting_rollouts", "awaiting_dataset", "awaiting_sft_dataset"}:
             raise LedgerConflict("Model budget can only be allocated before training admission")
         allocation = {"training_micro_usd": training_micro_usd, "serving_micro_usd": serving_micro_usd}
-        if sum(allocation.values()) > proposal["budget"]["modal_micro_usd"]:
-            raise BudgetRefused("Training and serving allocations exceed the proposal Modal bound")
+        approved = {
+            "training_micro_usd": proposal["budget"]["modal_training_micro_usd"],
+            "serving_micro_usd": proposal["budget"]["modal_serving_micro_usd"],
+        }
+        if allocation != approved or sum(allocation.values()) != proposal["budget"]["modal_micro_usd"]:
+            raise BudgetRefused("Training and serving allocations differ from the approved proposal")
         previous = workflow["details"].get("modal_allocation")
         if previous is not None and previous != allocation:
             raise LedgerConflict("Model Modal allocation is immutable")
@@ -690,12 +699,10 @@ class GameWorldCoordinator:
             if workflow["state"] == "awaiting_patch":
                 actions.append({"workflow": workflow["proposal_id"], "action": "attach-driver-patch"})
             elif workflow["state"] == "awaiting_dataset":
-                action = "allocate-model-budget" if "modal_allocation" not in workflow["details"] else "register-training-dataset"
-                actions.append({"workflow": workflow["proposal_id"], "action": action})
+                actions.append({"workflow": workflow["proposal_id"], "action": "register-training-dataset"})
             elif workflow["state"] == "awaiting_sft_dataset":
-                action = ("allocate-model-budget" if "modal_allocation" not in workflow["details"]
-                          else "attach-authenticated-sft-dataset")
-                actions.append({"workflow": workflow["proposal_id"], "action": action})
+                actions.append({"workflow": workflow["proposal_id"],
+                                "action": "attach-authenticated-sft-dataset"})
             elif workflow["state"] == "qualified_serving_live":
                 actions.append({"workflow": workflow["proposal_id"], "action": "start-joint-or-stop-serving"})
             elif workflow["state"] == "awaiting_serving_stop":

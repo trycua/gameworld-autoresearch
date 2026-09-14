@@ -146,6 +146,51 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(self.lifecycle.releases, 1)
         self.assertEqual(self.coordinator.workflow(self.proposal["id"])["state"], "evaluating")
 
+    def test_runner_materializes_patch_before_same_cycle_dispatch(self):
+        fixture = coordinator_fixtures.CoordinatorTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        coordinator = fixture.coordinator
+        proposal = fixture.fixture.driver_proposal("runner-research-patch")
+        coordinator.register(proposal)
+        coordinator.start_next("runner-research-action")
+
+        class Research:
+            async def materialize_required(inner_self):
+                target = proposal["experiment"]["target_paths"][0]
+                patch = fixture.root / "research.patch"
+                patch.write_text(
+                    f"diff --git a/{target} b/{target}\n--- a/{target}\n+++ b/{target}\n"
+                    "@@ -1 +1 @@\n-old\n+new\n")
+                coordinator.attach_driver_patch("runner-research-action", patch)
+                return [{"kind": "driver-patch", "outcome": "attached"}]
+
+        lifecycle = FleetLifecycle(coordinator.controller)
+        fleet = FleetExecutor(coordinator, lifecycle)
+        runner = GameWorldProviderRunner(
+            coordinator, MODAL,
+            {"QWEN_BASE_URL": "https://baseline.example/v1", "QWEN_API_KEY": "x" * 32},
+            fleet_lifecycle=lifecycle, fleet_executor=fleet, research_worker=Research())
+        result = self.run_async(runner.run_once(1))
+        self.assertEqual(result["research"][0]["outcome"], "attached")
+        self.assertEqual(result["dispatch"][0]["kind"], "driver_build")
+        self.assertEqual(fleet.driver_attempts, 1)
+
+    def test_research_stop_rechecks_gate_before_admission(self):
+        class Research:
+            async def materialize_required(inner_self):
+                self.coordinator.controller.stop("synthetic research stop")
+                return [{"kind": "driver-patch", "outcome": "failed"}]
+
+        runner = GameWorldProviderRunner(
+            self.coordinator, MODAL,
+            {"QWEN_BASE_URL": "https://baseline.example/v1", "QWEN_API_KEY": "x" * 32},
+            fleet_lifecycle=self.lifecycle, fleet_executor=self.fleet, research_worker=Research())
+        result = self.run_async(runner.run_once(1))
+        self.assertEqual(result["admitted"], [])
+        self.assertEqual(result["dispatch"], [])
+        self.assertEqual(self.fleet.driver_attempts, 0)
+
     def test_runner_emits_budget_and_candidate_evaluation_metrics(self):
         class Telemetry:
             campaign = "test-gameworld"

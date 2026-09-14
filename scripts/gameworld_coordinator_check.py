@@ -115,6 +115,9 @@ class CoordinatorTests(unittest.TestCase):
         self.coordinator.register(proposal)
         self.coordinator.start_next("model-action")
         self.assertEqual(len(self.coordinator._items(proposal["id"], "rollout")), 1)
+        self.assertEqual(self.coordinator.workflow(proposal["id"])["details"]["modal_allocation"], {
+            "training_micro_usd": 5_000_000, "serving_micro_usd": 5_000_000,
+        })
         self.coordinator.allocate_model_budget("model-action", 5_000_000, 5_000_000)
         rollout = self.coordinator.admit_ready(1)[0]["job_id"]
         artifact = self.root / "coordinator/fleet" / rollout
@@ -157,10 +160,11 @@ class CoordinatorTests(unittest.TestCase):
         proposal = self.fixture.model_proposal("model-sft")
         proposal["experiment"]["objective"] = "sft"
         proposal["experiment"]["rollouts_per_task"] = 1
+        proposal["experiment"]["sft_source_id"] = "test-sft-source"
         self.coordinator.register(proposal)
         self.coordinator.start_next("sft-action")
         self.assertEqual(self.coordinator._items(proposal["id"]), [])
-        self.assertEqual(self.coordinator.required_actions()[0]["action"], "allocate-model-budget")
+        self.assertEqual(self.coordinator.required_actions()[0]["action"], "attach-authenticated-sft-dataset")
         self.coordinator.allocate_model_budget("sft-action", 5_000_000, 5_000_000)
         task = proposal["experiment"]["training_tasks"][0]
         dataset = self.root / "sft-dataset"

@@ -55,6 +55,8 @@ Return exactly one JSON object matching this shape:
   },
   "budget": {
     "modal_micro_usd": 0,
+    "modal_training_micro_usd": 0,
+    "modal_serving_micro_usd": 0,
     "litellm_tokens": 200000,
     "desktop_episodes": 68,
     "timeout_seconds": 900
@@ -64,7 +66,10 @@ Return exactly one JSON object matching this shape:
 
 For a model proposal, `experiment` must contain `kind`, `objective`,
 `training_tasks`, `evaluation_tasks`, `rollouts_per_task`,
-`max_trajectory_steps` and `optimizer_steps`. GRPO requires two to eight fresh
-rollouts per task. SFT uses one. Do not claim that a proposal was executed.
+`max_trajectory_steps`, `optimizer_steps` and `sft_source_id`. GRPO requires two to eight fresh
+rollouts per task. SFT uses one. Its budget must split `modal_micro_usd` exactly
+between positive `modal_training_micro_usd` and `modal_serving_micro_usd`
+reservations. GRPO sets `sft_source_id` to null; SFT must select one source ID
+offered by the trusted campaign context. Do not claim that a proposal was executed.
 Every candidate evaluation must list all 34 development tasks; the trusted
 controller runs two paired repeats per game and assigns a fresh comparison ID.

@@ -36,6 +36,7 @@ class GameWorldSFTTests(unittest.TestCase):
         self.proposal = self.fixture.fixture.model_proposal("model-sft")
         self.proposal["experiment"]["objective"] = "sft"
         self.proposal["experiment"]["rollouts_per_task"] = 1
+        self.proposal["experiment"]["sft_source_id"] = "vertical-sft-source"
         self.coordinator.register(self.proposal)
         self.coordinator.start_next("sft-action")
         self.coordinator.allocate_model_budget("sft-action", 5_000_000, 5_000_000)

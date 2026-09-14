@@ -23,6 +23,7 @@ SOURCE_FILES = (
     "fps_bench/gameworld_grpo.py",
     "fps_bench/gameworld_modal.py",
     "fps_bench/gameworld_research.py",
+    "fps_bench/gameworld_research_worker.py",
     "fps_bench/gameworld_rollout.py",
     "fps_bench/gameworld_runner.py",
     "fps_bench/gameworld_serving.py",
