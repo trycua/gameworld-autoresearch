@@ -179,9 +179,6 @@ async def collect(assignment_path, policy_identity_path, output, driver):
         member, current = await collect_member(assignment, policy_identity, driver, dataset, custody, index)
         members.append(member)
         metadata.append(current)
-    initial_states = {item["initial_state_sha256"] for item in metadata}
-    if len(initial_states) != 1:
-        raise ValueError("Grouped rollouts did not share the same initial GameWorld state")
     files = {str(path.relative_to(dataset)): digest(path.read_bytes())
              for path in sorted(dataset.rglob("*")) if path.is_file()}
     manifest_policy = {key: policy_identity[key] for key in (
@@ -192,7 +189,7 @@ async def collect(assignment_path, policy_identity_path, output, driver):
                 "reward": policy["model"]["grpo"],
                 "groups": [{"id": assignment["group_id"], "game": assignment["game"],
                             "task": assignment["task"], "seed": assignment["seed"],
-                            "initial_state_sha256": next(iter(initial_states)), "members": members}],
+                            "initial_state_sha256": metadata[0]["initial_state_sha256"], "members": members}],
                 "files": files}
     manifest_bytes = canonical(manifest)
     write_once(dataset / "rollouts.json", manifest_bytes)

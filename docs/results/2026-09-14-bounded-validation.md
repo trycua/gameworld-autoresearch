@@ -105,6 +105,15 @@ Run evidence is in `vertical-slices/grpo-authenticated-v8/bounded-result.json`,
 
 ## Local checks
 
+Follow-up: at the user's direction, removed the extra cross-member initial-state
+hash equality gate rather than introducing replacement equivalence rules. Raw
+per-member state hashes remain in custody; the dataset's existing group field
+records the first member's hash for provenance, not an equality assertion.
+GameWorld evaluation, seeding, reward calculation, and dataset integrity checks
+remain unchanged. Research continues to use the existing history; no separate
+history or hypothesis-rejection system was added. This source change does not
+retroactively accept the failed frozen run or restart the campaign.
+
 - Image input/provenance checks and both worker entrypoint import probes passed.
 - Browser research tests: 12 passed.
 - Fleet executor tests: 6 passed.

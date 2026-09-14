@@ -124,6 +124,14 @@ class ResearchWorkerTests(unittest.TestCase):
         self.assertEqual(executor.calls[0][0], "driver-patch")
         self.assertEqual(executor.preflights, 1)
 
+    def test_proposal_context_reuses_existing_history(self):
+        proposal = self.fixture.fixture.driver_proposal("history-existing")
+        self.coordinator.register(proposal)
+        history = self.worker(Executor()).proposal_context()["history"]
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]["id"], proposal["id"])
+        self.assertEqual(history[0]["proposal"], proposal)
+
     def test_gateway_preflight_failure_does_not_consume_research_attempt(self):
         worker = self.worker(Executor(preflight_fail=True))
         with self.assertRaises(ConnectionError):
