@@ -50,10 +50,16 @@ for historical probes, image imports and explicit revision polling.
 ```bash
 PYTHONPATH=. python scripts/modal_reconcile_completed.py \
   --database /home/node/.local/state/gameworld-autoresearch/campaigns/gameworld-joint-20260913/campaign.sqlite \
+  --campaign gameworld-joint-20260913 \
   --scope /home/node/.local/state/gameworld-autoresearch/campaigns/gameworld-joint-20260913/modal-app/scope.json \
   --plan configs/modal/completed-work-20260914.json \
   --output results/runs/modal-reconciliation-UNIQUE
 ```
+
+Repeat `--scope` when one closed billing window covers multiple dedicated apps.
+The plan's sorted `object_ids` must exactly match those verified app IDs. Image
+import completion times are checked against the canonical ledger event before
+provider image lookup, so a caller cannot move an import into another hour.
 
 Use a fresh output directory for another provider observation. Revisions use the
 same plan/group, rather than extending a closed scope or inventing per-job shares

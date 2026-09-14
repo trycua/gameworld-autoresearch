@@ -12,21 +12,44 @@ from fps_bench.modal_reconciliation import reconcile
 from fps_bench.modal_scope import inspect_app_scope, validate_app_scope
 
 
+def validate_plan_scopes(plan, app_scopes):
+    if len({scope['app_id'] for scope in app_scopes}) != len(app_scopes):
+        raise ValueError('Modal app scopes must be unique')
+    expected_ids = sorted(scope['app_id'] for scope in app_scopes)
+    if plan['scope']['object_ids'] != expected_ids:
+        raise ValueError('Plan must cover exactly the verified dedicated apps')
+    expected_context = {(scope['workspace'], scope['environment']) for scope in app_scopes}
+    if (len(expected_context) != 1
+            or (plan['scope']['workspace'], plan['scope']['environment']) not in expected_context):
+        raise ValueError('Billing scope differs from app credentials')
+    return expected_ids
+
+
+def validate_image_import_completion(connection, reservation_id, finished_at):
+    completed = [event['timestamp'] for event in connection.execute(
+        "SELECT timestamp,payload FROM events WHERE kind='image_import_completed'")
+        if json.loads(event['payload']).get('id') == reservation_id]
+    if (len(completed) != 1
+            or int(datetime.fromisoformat(finished_at).timestamp()) != completed[0]):
+        raise ValueError('Image import completion timestamp differs from ledger custody')
+    return completed[0]
+
+
 async def run(args):
     import modal
     from modal.client import _Client
     from modal_proto import api_pb2
 
     ledger = CampaignLedger(args.database)
-    if ledger.snapshot()['campaign']['id'] != 'gameworld-joint-20260913':
+    if ledger.snapshot()['campaign']['id'] != args.campaign:
         raise ValueError('Canonical GameWorld ledger required')
-    app_scope = json.loads(args.scope.read_bytes())
-    validate_app_scope(await inspect_app_scope(app_scope['workspace'], app_scope['environment'], app_scope['app']), app_scope)
+    app_scopes = [json.loads(path.read_bytes()) for path in args.scope]
+    for app_scope in app_scopes:
+        validate_app_scope(
+            await inspect_app_scope(app_scope['workspace'], app_scope['environment'], app_scope['app']),
+            app_scope)
     plan = json.loads(args.plan.read_bytes())
-    if plan['scope']['object_ids'] != [app_scope['app_id']]:
-        raise ValueError('Plan must cover exactly this dedicated app')
-    if plan['scope']['workspace'] != app_scope['workspace'] or plan['scope']['environment'] != app_scope['environment']:
-        raise ValueError('Billing scope differs from app credentials')
+    expected_ids = validate_plan_scopes(plan, app_scopes)
     args.output.mkdir(parents=True, exist_ok=False)
     exclusive_write(args.output / 'plan.json', canonical(plan))
     workspace = await modal.Workspace.from_context().hydrate.aio()
@@ -38,7 +61,9 @@ async def run(args):
     provider = {'scope': plan['scope'], 'method': 'Workspace.billing.report', 'rows': rows,
                 'retrieved_at': datetime.now(timezone.utc).isoformat()}
     exclusive_write(args.output / 'provider-report.json', canonical(provider))
-    running = [sandbox.object_id async for sandbox in modal.Sandbox.list.aio(app_id=app_scope['app_id'])]
+    running = []
+    for app_id in expected_ids:
+        running.extend([sandbox.object_id async for sandbox in modal.Sandbox.list.aio(app_id=app_id)])
     if running:
         raise RuntimeError('Dedicated app still has running sandboxes')
     resources = []
@@ -56,6 +81,7 @@ async def run(args):
                                               (item['reservation_id'],)).fetchone()
                 if imported is None or imported['state'] != 'complete' or imported['image_id'] != item['provider_id']:
                     raise ValueError('Image import is unresolved')
+                validate_image_import_completion(connection, item['reservation_id'], item['finished_at'])
             client = await _Client.from_env()
             await asyncio.wait_for(client.stub.ImageFromId(api_pb2.ImageFromIdRequest(image_id=item['provider_id'])), 30)
             item['state'] = 'complete'
@@ -75,6 +101,9 @@ async def run(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('database', 'scope', 'plan', 'output'):
-        parser.add_argument('--' + name, type=Path, required=True)
+    parser.add_argument('--database', type=Path, required=True)
+    parser.add_argument('--campaign', required=True)
+    parser.add_argument('--scope', type=Path, action='append', required=True)
+    parser.add_argument('--plan', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
     asyncio.run(run(parser.parse_args()))
