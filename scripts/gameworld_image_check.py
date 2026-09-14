@@ -4,13 +4,16 @@ import json
 from pathlib import Path
 import re
 import shlex
+import sys
 import tempfile
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 from fps_bench.qwen_baseline import sha256
 from image.write_provenance import build_manifest
 
 
-ROOT = Path(__file__).resolve().parents[1]
 COPIED = {
     "cua-driver/", "fps_bench/", "configs/",
     "scripts/gameworld_driver_contract.py", "scripts/gameworld_driver_worker.py",
