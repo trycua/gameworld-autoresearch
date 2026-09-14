@@ -35,6 +35,7 @@ SOURCE_FILES = (
     "fps_bench/modal_reconciliation.py",
     "fps_bench/research_gateway.py",
     "scripts/gameworld_driver_worker.py",
+    "scripts/litellm_research_key.py",
     "scripts/gameworld_model_worker.py",
     "tools/pi/browser-research.mjs",
     "tools/pi/browser-tools.mjs",

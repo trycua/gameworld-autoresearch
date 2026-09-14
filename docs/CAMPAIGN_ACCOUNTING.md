@@ -67,41 +67,44 @@ production campaign ledger.
    Modal usage), deduplicated against provider records; do not silently reset to zero.
 5. Provider freshness and discrepancy checks, independent cleanup watchdog,
    durable backup/recovery, and boundary/failure-injection tests across real adapters.
-6. Only after these integrations are verified, update the still-pending enforcement
-   statuses in `configs/pi/research-limits.json` and enable paid campaign dispatch.
+6. Update each enforcement status only when its implementation and live evidence
+   support the narrower claim; do not infer readiness for unrelated providers.
 
-## Research relay (development only)
+## Research relay
 
 `fps_bench/research_gateway.py` exposes authenticated `/v1/models` and
-`/v1/chat/completions` on loopback port 8765. Each HTTP inference attempt receives
-a fresh durable reservation and dispatch ID before the relay contacts LiteLLM.
-Retries by Pi therefore get separate reservations. The relay itself performs no
-retry and refuses redirects, alternate upstreams, unknown model aliases, image
-inputs, multiple completions and arbitrary metadata. It caps request/response
-bytes, output tokens and socket waits. SSE is buffered until its final usage and
-DONE marker are observed, then returned unchanged to the Pi client. This increases
-time-to-first-token; real end-to-end client timeouts still need live verification.
+`/v1/chat/completions` on loopback port 8765. Each request receives a fresh durable
+reservation and dispatch ID before the relay contacts LiteLLM. The relay refuses
+redirects, alternate upstreams, unknown model aliases, image inputs, multiple
+completions and researcher-supplied metadata. It caps request/response bytes,
+output tokens and socket waits. SSE is buffered until its final usage and DONE
+marker are observed, then returned unchanged to the Pi client.
 
-Successful streamed/nonstreamed usage is an **observation**, not a reconciled
-receipt. The original hold remains charged. Timeout, incomplete stream, absent or
-inconsistent usage, or an observed overrun freezes further admission; client error
-responses and audit events omit upstream exception strings, secrets and prompts.
-Disconnects never refund holds. Holds expire after ten minutes, at which point
-new admission stops unless a trusted reconciler has settled them.
+The relay requires three distinct credentials: the local Pi bearer, a dedicated
+`gameworld-autoresearch-*` LiteLLM virtual key, and the LiteLLM admin key. It joins
+the response `x-litellm-call-id` to authenticated `/spend/logs/v2` rows filtered by
+the dedicated key alias, verifies final response usage, and settles the reservation
+atomically before replying. The configured two provider retries are included in a
+433,152-token reservation. Logged failed-attempt usage is used when present;
+otherwise each hidden retry retains the full 144,384-token attempt upper bound.
 
-**The 144,384-token per-request development reservation is not a verified bound
-on all cloud backend attempts.** The local cloud config at
-`nixos/litellm/config.yaml` contains `num_retries: 2` and alias fallbacks. Response
-usage alone cannot prove accounting for every failed or hidden attempt. Live route
-configuration, hard retry bounds, provider usage reconciliation and prior campaign
-usage must be established before production admission can be enabled. The default
-CLI refuses to start; `--development-unreconciled` is an explicit development-only
-acknowledgement, not campaign launch approval or cap enforcement certification.
+Timeout, incomplete stream, missing/duplicate/cross-key spend rows, inconsistent
+usage or excessive retries freeze further admission and keep the reservation held.
+Client errors and audit events omit upstream exception strings, secrets and prompts.
+This conservative retry accounting can overcount but cannot silently refund an
+unobserved attempt.
 
-The Pi profile now reads `$GAMEWORLD_RESEARCH_TOKEN` and uses the loopback relay.
-The launcher strips the upstream `$LITELLM_API_KEY` rather than loading it from
-its key file. The trusted relay separately receives both credentials from its
-supervisor environment; it refuses identical upstream and client credentials.
+Create or verify the dedicated key outside the repository:
+
+```bash
+PYTHONPATH=. python3 scripts/litellm_research_key.py create \
+  --output /durable/secrets/gameworld-litellm.json \
+  --alias gameworld-autoresearch-YYYYMMDD
+```
+
+The Pi profile reads `$GAMEWORLD_RESEARCH_TOKEN` and uses the loopback relay.
+The launcher strips all LiteLLM credentials. The trusted relay separately receives
+`LITELLM_RESEARCH_KEY`, `LITELLM_RESEARCH_KEY_ALIAS` and `LITELLM_MASTER_KEY`.
 Do not grant researcher containers access to upstream credential files or the
 ledger. This loopback service is not yet a remotely deployed authentication or
 network-isolation boundary.
@@ -114,13 +117,16 @@ node --test tools/pi/research.test.mjs tools/pi/browser-research.test.mjs
 ```
 
 The gateway suite drives real local HTTP requests and the installed Pi SDK against
-a fake upstream, including admission refusal before any upstream call. This is
-SDK compatibility evidence, not real LiteLLM billing validation.
+a fake upstream, including admission refusal before dispatch, paginated spend-log
+matching, retry bounds, exact settlement and failure retention. Live dedicated-key
+evidence remains required for the deployed gateway.
 
 The controller now shares atomic admission/settlement transactions with this
 ledger; see `docs/CAMPAIGN_CONTROLLER.md`. Research proposals declare bounds, while
 actual LiteLLM requests reserve independently through the relay. Authenticated
-upstream token settlement and retry attribution remain launch blockers.
+upstream token settlement and retry attribution are implemented; deployment and
+continuous campaign evidence remain launch gates. The successful dedicated-key
+probe is recorded in `docs/results/2026-09-14-litellm-reconciliation.md`.
 
 
 ## Historical Modal import (real provider evidence)

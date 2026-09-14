@@ -121,4 +121,4 @@ credential filtering, closed-hour billing recovery and restart idempotency. They
 constitute a live Fleet or Modal campaign. Protected-split tests cover all 34
 confirmation tasks and all 34 sealed tasks, promotion and rollback. Remaining gates
 are current image/contract publication, production watchdog deployment, authenticated
-LiteLLM settlement and bounded real vertical slices.
+provider campaign evidence and bounded real vertical slices.

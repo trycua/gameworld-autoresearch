@@ -33,8 +33,9 @@ The approved LiteLLM campaign limit is 1,000,000,000 total input plus output tok
 across all four aliases, including cached input once and retries. It is not a
 per-minute or per-workflow allowance. See configs/pi/research-limits.json. The
 local research gateway reserves requests in the canonical campaign ledger;
-per-workflow limits alone do not enforce that cap. Final provider-usage settlement
-and retry reconciliation are still required before production admission.
+per-workflow limits alone do not enforce that cap. The gateway settles against
+authenticated LiteLLM spend logs and retains conservative bounds for hidden retries;
+missing or inconsistent evidence freezes campaign admission.
 Token/concurrency/time limits here are operational bounds, not USD enforcement.
 The campaign controller owns aggregate Modal reservations, but authenticated live
 billing reconciliation is still a launch gate. Do not launch paid Modal jobs or an

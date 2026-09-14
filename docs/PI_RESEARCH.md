@@ -6,9 +6,9 @@ user's global pi agent profile. It does not launch Modal jobs or a research camp
 ## Setup and launch
 
 The profile now targets the controller-local metered relay at
-`http://127.0.0.1:8765/v1`, not LiteLLM directly. The relay is development-only
-until upstream retry bounds and billing reconciliation are validated; normal
-startup deliberately refuses production operation. See `docs/CAMPAIGN_ACCOUNTING.md`.
+`http://127.0.0.1:8765/v1`, not LiteLLM directly. The relay requires authenticated
+LiteLLM spend-log reconciliation and refuses startup without a dedicated virtual
+key, its alias and a separate admin credential. See `docs/CAMPAIGN_ACCOUNTING.md`.
 The commands below require a separately started relay and its client credential.
 
 ```bash
@@ -35,7 +35,7 @@ back to direct LiteLLM access. This is not isolation from the host filesystem;
 untrusted researchers still need a separate OS/network boundary.
 
 A four-model-scoped virtual key was created for this setup. It expires on
-2026-09-20 at 19:56:34 UTC; renew it before later use. The launcher does not mint
+2026-09-21 at 11:44:24 UTC; renew it before later use. The launcher does not mint
 keys and never falls back to the master key. No LiteLLM dollar budget was added.
 
 ## Browser-backed research
@@ -110,9 +110,13 @@ packages; an integration test verifies command registration and context loading.
 The local gateway reserves every admitted request against the canonical
 1-billion-token campaign ledger and freezes the campaign when final usage is
 ambiguous. Pi's per-workflow token budget still does not include every parent
-session or other workflow, so it is not the campaign gate. Successful request
-holds remain reserved until authenticated upstream usage and retry reconciliation
-settle them; production gateway startup therefore remains disabled by default.
+session or other workflow, so it is not the campaign gate. Successful requests
+settle only after the response usage matches the authenticated LiteLLM spend row.
+Provider-reported hidden retries retain a conservative full-attempt upper bound
+when no failed-attempt usage row exists.
+Live no-retry evidence is recorded in
+`docs/results/2026-09-14-litellm-reconciliation.md`; a naturally occurring retry
+was not forced.
 LiteLLM reports zero token prices for these aliases; its dollar counter is not the
 Modal cost ledger. Modal training and serving reservations are owned by the
 campaign controller, but no unattended campaign should launch until live provider

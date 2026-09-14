@@ -10,7 +10,28 @@ import unittest
 from urllib import request, error
 
 from fps_bench.campaign_ledger import CampaignLedger
-from fps_bench.research_gateway import ResearchGateway, REQUEST_HOLD, usage_observation
+from fps_bench.research_gateway import (
+    ATTEMPT_HOLD,
+    LiteLLMSpendReconciler,
+    ResearchGateway,
+    REQUEST_HOLD,
+    usage_observation,
+)
+
+
+class Reconciler:
+    admin_key = "admin-" + "z" * 40
+
+    def __init__(self):
+        self.calls = []
+        self.error = None
+
+    def reconcile(self, call_id, usage, started_at):
+        self.calls.append((call_id, usage, started_at))
+        if self.error is not None:
+            raise self.error
+        return {"settled_tokens": usage["total_tokens"], "attempted_retries": 0,
+                "failed_attempt_rows": 0, "receipt": "litellm-spend:" + call_id}
 
 
 class GatewayTests(unittest.TestCase):
@@ -22,8 +43,9 @@ class GatewayTests(unittest.TestCase):
         self.calls = []
         self.response = json.dumps({"id": "test", "choices": [], "usage": {
             "prompt_tokens": 30, "completion_tokens": 10, "total_tokens": 40}}).encode()
+        self.reconciler = Reconciler()
         self.server = ResearchGateway(("127.0.0.1", 0), self.ledger, "client-" + "x" * 40,
-                                      "upstream-secret", self.transport)
+                                      "upstream-secret-key", self.reconciler, self.transport)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.addCleanup(self.stop)
@@ -37,7 +59,7 @@ class GatewayTests(unittest.TestCase):
         self.calls.append((body, key, dispatch))
         if isinstance(self.response, Exception):
             raise self.response
-        return self.response
+        return {"payload": self.response, "headers": {"x-litellm-call-id": dispatch}}
 
     def post(self, body=None, token=None, route="/v1/chat/completions"):
         payload = body if body is not None else {
@@ -62,17 +84,19 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(self.post()[0], 429)
         self.assertEqual(self.calls, [])
 
-    def test_success_retains_hold_until_provider_reconciliation(self):
+    def test_success_settles_authenticated_usage_before_reply(self):
         status, body, headers = self.post()
         self.assertEqual(status, 200)
         self.assertEqual(body, self.response)
         held = self.ledger.snapshot()["reservations"]
         self.assertEqual(len(held), 1)
         self.assertEqual(held[0]["amount"], REQUEST_HOLD)
-        self.assertEqual(held[0]["state"], "held")
+        self.assertEqual(held[0]["actual"], 40)
+        self.assertEqual(held[0]["state"], "settled")
         self.assertEqual(held[0]["id"], headers["X-Gameworld-Dispatch-ID"])
-        self.assertEqual(self.calls[0][1], "upstream-secret")
-        self.assertNotIn(b"upstream-secret", body)
+        self.assertEqual(self.reconciler.calls[0][0], headers["X-Gameworld-Dispatch-ID"])
+        self.assertEqual(self.calls[0][1], "upstream-secret-key")
+        self.assertNotIn(b"upstream-secret-key", body)
 
     def test_duplicate_client_requests_are_separately_reserved(self):
         self.assertEqual(self.post()[0], 200)
@@ -80,11 +104,19 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 2)
         self.assertEqual(len(self.ledger.snapshot()["reservations"]), 2)
 
+    def test_reconciliation_failure_freezes_and_retains_hold(self):
+        self.reconciler.error = ValueError("spend log unavailable")
+        status, _, _ = self.post()
+        self.assertEqual(status, 502)
+        snapshot = self.ledger.snapshot()
+        self.assertTrue(snapshot["campaign"]["frozen"])
+        self.assertEqual(snapshot["reservations"][0]["state"], "held")
+
     def test_timeout_freezes_and_keeps_reservation(self):
-        self.response = TimeoutError("upstream-secret must never reach response")
+        self.response = TimeoutError("upstream-secret-key must never reach response")
         status, body, _ = self.post()
         self.assertEqual(status, 502)
-        self.assertNotIn(b"upstream-secret", body)
+        self.assertNotIn(b"upstream-secret-key", body)
         self.assertTrue(self.ledger.snapshot()["campaign"]["frozen"])
         self.assertEqual(self.post()[0], 429)
         self.assertEqual(len(self.calls), 1)
@@ -150,6 +182,99 @@ class GatewayTests(unittest.TestCase):
         for content in ["x" * 70000, [{"type": "image_url", "image_url": {"url": "https://example.com"}}]]:
             self.assertEqual(self.post({"model": "astra", "messages": [{"role": "user", "content": content}]})[0], 400)
         self.assertEqual(self.calls, [])
+
+
+class SpendReconciliationTests(unittest.TestCase):
+    def setUp(self):
+        self.alias = "gameworld-autoresearch-test"
+        self.call_id = "call-1234567890123456"
+        self.usage = {"prompt_tokens": 30, "completion_tokens": 10, "total_tokens": 40}
+        self.pages = []
+
+    def transport(self, base_url, admin_key, key_alias, start_date, end_date, page):
+        self.pages.append((base_url, admin_key, key_alias, start_date, end_date, page))
+        return {"data": [self.row()], "page": page, "page_size": 100, "total": 1, "total_pages": 1}
+
+    def row(self, **changes):
+        row = {"request_id": "request-one", "status": "success",
+               "prompt_tokens": 30, "completion_tokens": 10, "total_tokens": 40,
+               "metadata": {"litellm_call_id": self.call_id,
+                            "user_api_key_alias": self.alias,
+                            "attempted_retries": 0, "max_retries": 2}}
+        row.update(changes)
+        return row
+
+    def reconciler(self, transport=None, polls=1):
+        return LiteLLMSpendReconciler(
+            "admin-" + "z" * 40, self.alias, transport=transport or self.transport,
+            poll_attempts=polls, poll_seconds=0)
+
+    def test_authenticated_log_settles_exact_no_retry_usage(self):
+        result = self.reconciler().reconcile(self.call_id, self.usage, time.time())
+        self.assertEqual(result["settled_tokens"], 40)
+        self.assertEqual(result["attempted_retries"], 0)
+        self.assertTrue(result["receipt"].startswith("litellm-spend:"))
+        self.assertEqual(self.pages[0][2], self.alias)
+
+    def test_hidden_retry_reserves_conservative_attempt_upper_bound(self):
+        def retried(*args):
+            row = self.row()
+            row["metadata"]["attempted_retries"] = 1
+            return {"data": [row], "page": 1, "total_pages": 1}
+        result = self.reconciler(retried).reconcile(self.call_id, self.usage, time.time())
+        self.assertEqual(result["settled_tokens"], ATTEMPT_HOLD + 40)
+
+    def test_logged_failed_attempt_usage_replaces_upper_bound(self):
+        def retried(*args):
+            success = self.row()
+            success["metadata"]["attempted_retries"] = 1
+            failure = self.row(request_id="request-failed", status="failure",
+                               prompt_tokens=20, completion_tokens=0, total_tokens=20)
+            return {"data": [success, failure], "page": 1, "total_pages": 1}
+        result = self.reconciler(retried).reconcile(self.call_id, self.usage, time.time())
+        self.assertEqual(result["settled_tokens"], 60)
+
+    def test_usage_alias_and_retry_mismatches_fail_closed(self):
+        cases = []
+        wrong_usage = self.row(total_tokens=41)
+        cases.append([wrong_usage])
+        wrong_alias = self.row()
+        wrong_alias["metadata"]["user_api_key_alias"] = "another"
+        cases.append([wrong_alias])
+        excessive = self.row()
+        excessive["metadata"].update(attempted_retries=3, max_retries=3)
+        cases.append([excessive])
+        for rows in cases:
+            with self.subTest(rows=rows):
+                transport = lambda *args, rows=rows: {"data": rows, "page": 1, "total_pages": 1}
+                with self.assertRaises(ValueError):
+                    self.reconciler(transport).reconcile(self.call_id, self.usage, time.time())
+
+    def test_every_retry_row_requires_dedicated_key_and_unique_identity(self):
+        for failure_change in [
+            {"metadata": {"litellm_call_id": self.call_id,
+                          "user_api_key_alias": "another"}},
+            {"request_id": "request-one"},
+            {"request_id": None},
+        ]:
+            success = self.row()
+            success["metadata"]["attempted_retries"] = 1
+            failure = self.row(request_id="request-failed", status="failure", total_tokens=20)
+            failure.update(failure_change)
+            rows = [success, failure]
+            with self.subTest(failure_change=failure_change):
+                transport = lambda *args, rows=rows: {"data": rows, "page": 1, "total_pages": 1}
+                with self.assertRaises(ValueError):
+                    self.reconciler(transport).reconcile(self.call_id, self.usage, time.time())
+
+    def test_missing_log_exhausts_bounded_poll(self):
+        calls = []
+        def empty(*args):
+            calls.append(args)
+            return {"data": [], "page": 1, "total_pages": 0}
+        with self.assertRaises(ValueError):
+            self.reconciler(empty, polls=3).reconcile(self.call_id, self.usage, time.time())
+        self.assertEqual(len(calls), 3)
 
 
 if __name__ == "__main__":

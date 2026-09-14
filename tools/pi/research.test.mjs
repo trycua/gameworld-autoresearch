@@ -67,6 +67,6 @@ test('campaign tokens and Modal dollars use separate controller gates', async ()
   assert.equal(limits.litellm.dollar_budget, null);
   assert.equal(limits.modal.spending_cap_usd, 2000);
   assert.equal(limits.modal.normal_work_allowance_usd + limits.modal.shutdown_reserve_usd, 2000);
-  assert.equal(limits.litellm.enforcement_status, 'controller_gateway_reservations_pending_provider_reconciliation');
+  assert.equal(limits.litellm.enforcement_status, 'controller_gateway_authenticated_spend_logs_with_retry_upper_bound');
   assert.equal(limits.modal.enforcement_status, 'campaign_controller_reservations_pending_live_reconciliation');
 });

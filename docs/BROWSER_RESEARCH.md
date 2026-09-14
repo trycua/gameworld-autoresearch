@@ -9,9 +9,9 @@ GameWorld browser, Fleet desktop, personal browser or a shared CDP endpoint.
 
 The Pi profile now requires the controller-local metered research relay and
 `GAMEWORLD_RESEARCH_TOKEN`. Direct upstream credentials are removed from the
-launcher environment. Production relay startup is disabled pending verified
-upstream retry bounds and billing reconciliation. Previous live smoke results
-predate this relay; see `docs/CAMPAIGN_ACCOUNTING.md` for current limitations.
+launcher environment. The trusted relay uses a dedicated virtual key and settles
+authenticated spend-log usage, including conservative hidden-retry bounds, before
+replying. Live deployment evidence remains pending; see `docs/CAMPAIGN_ACCOUNTING.md`.
 
 Install the pinned dependencies and generate the isolated pi profile:
 
