@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "id": "gameworld-joint-autoresearch-v1",
+  "catalog_manifest_sha256": "8e1c68c9680fe50b0dd71e581aef7ce8670b730e8b5bf83dc14c686dea0372a2",
+  "baseline_phase": "suite-baseline-v1",
+  "split_policy": {
+    "train_task_ordinals": [1, 2],
+    "development_task_ordinals": [3],
+    "confirmation_task_ordinals": [4],
+    "sealed_task_ordinals": [5]
+  },
+  "candidate_policy": {
+    "maximum_candidates": 10,
+    "required_isolated_tracks": ["driver", "model"],
+    "joint_comparison": "two-by-two-factorial",
+    "development_repeats": 2
+  },
+  "driver": {
+    "allowed_source_prefixes": [
+      "cua-driver/rust/crates/platform-linux/src/",
+      "cua-driver/rust/crates/cua-driver-core/src/",
+      "cua-driver/rust/crates/cua-driver/src/"
+    ],
+    "required_contract_tests": [
+      "build",
+      "focus",
+      "held-keys",
+      "key-release",
+      "mouse-delivery"
+    ]
+  },
+  "model": {
+    "base_model": "Qwen/Qwen3-VL-2B-Instruct",
+    "base_revision": "89644892e4d85e24eaac8bacfd4f463576704203",
+    "objectives": ["sft", "grpo"],
+    "minimum_grpo_group_size": 2,
+    "maximum_grpo_group_size": 8,
+    "maximum_trajectory_steps": 60,
+    "maximum_optimizer_steps": 32
+  },
+  "limits": {
+    "modal_micro_usd_total": 2000000000,
+    "modal_micro_usd_normal": 1800000000,
+    "litellm_tokens": 1000000000,
+    "desktop_concurrency": 2,
+    "training_concurrency": 1,
+    "campaign_seconds": 21600
+  }
+}
