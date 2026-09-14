@@ -137,6 +137,34 @@ class GatewayTests(unittest.TestCase):
         self.assertTrue(self.ledger.snapshot()["campaign"]["frozen"])
         self.assertEqual(self.post()[0], 429)
         self.assertEqual(len(self.calls), 1)
+        with self.ledger.transaction() as connection:
+            failure = json.loads(connection.execute(
+                "SELECT payload FROM events WHERE kind='dispatch_unresolved'").fetchone()[0])
+        self.assertEqual(failure["phase"], "upstream_transport")
+        self.assertEqual(failure["error_type"], "TimeoutError")
+        self.assertIsNone(failure["call_id"])
+        self.assertNotIn("upstream-secret-key", json.dumps(failure))
+
+    def test_http_failure_records_status_without_response_body(self):
+        self.response = error.HTTPError("https://example.com", 503, "upstream-secret-key", {}, None)
+        self.assertEqual(self.post()[0], 502)
+        with self.ledger.transaction() as connection:
+            failure = json.loads(connection.execute(
+                "SELECT payload FROM events WHERE kind='dispatch_unresolved'").fetchone()[0])
+        self.assertEqual(failure["http_status"], 503)
+        self.assertEqual(failure["phase"], "upstream_transport")
+        self.assertNotIn("upstream-secret-key", json.dumps(failure))
+
+    def test_missing_usage_retains_call_identity_for_recovery(self):
+        self.response = b'{"choices":[]}'
+        self.assertEqual(self.post()[0], 502)
+        with self.ledger.transaction() as connection:
+            received = json.loads(connection.execute(
+                "SELECT payload FROM events WHERE kind='upstream_response_received'").fetchone()[0])
+            failure = json.loads(connection.execute(
+                "SELECT payload FROM events WHERE kind='dispatch_unresolved'").fetchone()[0])
+        self.assertEqual(failure["call_id"], received["call_id"])
+        self.assertEqual(failure["phase"], "usage_validation")
 
     def test_missing_usage_fails_closed(self):
         self.response = b'{"choices":[]}'

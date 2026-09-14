@@ -311,20 +311,32 @@ class ResearchHandler(BaseHTTPRequestHandler):
         except BudgetRefused:
             self.respond(429, {"error": "Campaign admission refused"})
             return
+        phase = "dispatch_journal"
+        started_at = time.time()
+        call_id = None
         try:
             self.server.event("dispatch_started", {"id": dispatch_id, "model": body["model"],
                                                     "request_sha256": hashlib.sha256(raw).hexdigest()})
-            started_at = time.time()
+            phase = "upstream_transport"
             upstream = self.server.transport(body, self.server.upstream_key, dispatch_id)
+            phase = "response_validation"
             if (not isinstance(upstream, dict) or not isinstance(upstream.get("payload"), bytes)
                     or not isinstance(upstream.get("headers"), dict)):
                 raise ValueError("Upstream transport omitted response evidence")
+            observed_call_id = upstream["headers"].get("x-litellm-call-id")
+            if (isinstance(observed_call_id, str) and 16 <= len(observed_call_id) <= 128
+                    and all(character.isascii() and (character.isalnum() or character in "-_:.")
+                            for character in observed_call_id)):
+                call_id = observed_call_id
+                self.server.event("upstream_response_received", {"id": dispatch_id, "call_id": call_id})
             response = upstream["payload"]
+            phase = "usage_validation"
             observation = usage_observation(response, body.get("stream", False))
             self.server.event("usage_observed", {"id": dispatch_id, **observation,
                                                 "reconciled": False})
-            call_id = upstream["headers"].get("x-litellm-call-id")
+            phase = "spend_reconciliation"
             settlement = self.server.reconciler.reconcile(call_id, observation, started_at)
+            phase = "ledger_settlement"
             with self.server.ledger.transaction() as connection:
                 self.server.ledger._settle_in_transaction(
                     connection, dispatch_id, settlement["settled_tokens"], settlement["receipt"])
@@ -336,9 +348,14 @@ class ResearchHandler(BaseHTTPRequestHandler):
                     "failed_attempt_rows": settlement["failed_attempt_rows"],
                     "receipt": settlement["receipt"],
                 })
-        except Exception:
+        except Exception as error:
             self.server.ledger.freeze(f"Ambiguous upstream usage for {dispatch_id}")
-            self.server.event("dispatch_unresolved", {"id": dispatch_id})
+            failure = {"id": dispatch_id, "phase": phase, "error_type": type(error).__name__,
+                       "elapsed_ms": max(0, int((time.time() - started_at) * 1000)), "call_id": call_id}
+            status = getattr(error, "code", None)
+            if type(status) is int and 100 <= status <= 599:
+                failure["http_status"] = status
+            self.server.event("dispatch_unresolved", failure)
             self.respond(502, {"error": "Upstream usage unresolved; campaign frozen"}, dispatch_id=dispatch_id)
             return
         content_type = "text/event-stream" if body.get("stream") else "application/json"

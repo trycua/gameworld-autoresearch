@@ -216,3 +216,46 @@ $25 hold. Keep the scheduled 19:00:05 UTC serving reconciliation: no image
 import overlaps its window. Import the current training image only after that
 reconciliation, and retain its subsequent billing obligation. Current imported
 images still embed the superseded policy and must not launch new training.
+
+## Real GPU SFT verification and research admission stop
+
+At 19:00 UTC the v8 serving obligation reconciled: $0.264578 observed, $10
+allocation retained without refund. Accounting forked to `campaign-v6.sqlite`,
+campaign `gameworld-joint-20260914-v6`, preserving the $281.013141 commitment.
+The current training image imported successfully as `im-gxEgf8dilLHjmc9TVBT7DF`.
+
+Job `sft-authenticated-v6` then trained the authenticated dataset on CUDA:
+two optimizer steps, losses 0.1534113 and 0.1759792, 112 updated parameter
+tensors, 71.0845 seconds, and zero maximum logit error after adapter reload.
+Peak CUDA allocation was 12,137,973,760 bytes. This validates the training and
+artifact path only; it does not establish benchmark improvement. Adapter hash:
+`f2bf639fbb443c0039de0eb55cc80f4542bfb08fc666a8bf0857f20f233012f0`.
+Both scalar/log export and the copied immutable training telemetry projection
+reached OTel with no errors and zero pending logs. The original artifact bundle
+is unchanged. Evidence is under `vertical-slices/sft-authenticated-v6` and
+`coordinator-v6/modal/sft-authenticated-v6` in the campaign state directory.
+
+The first new Pi planning request did not produce verifiable upstream usage.
+The gateway froze admission and retained all 3,342,336 reserved tokens for
+`litellm:c5649cb9-aa93-4873-a203-39e8e1a8f636`. No proposal or driver patch was
+registered. Authenticated spend-log queries returned no matching rows; that
+does not prove zero usage. The old gateway did not persist its exception type,
+HTTP status, or response call identity, so the underlying failure is not yet
+established. New diagnostics retain those safe fields and failure phase without
+logging credentials, request/response bodies, or exception messages. They do
+not release holds, retry ambiguous requests, or unfreeze the campaign.
+
+A planned Breakout grouped-rollout/GRPO validation stopped at admission before
+any serving job or claim was created. SFT sandbox `sb-UaVZerzVrcdj34avSDLtaC`
+terminated with a durable receipt; read-only checks found no running sandboxes
+in either dedicated Modal app. The research relay and watchdog were stopped
+after those checks. No full campaign has launched.
+
+Current Modal commitment is $311.013141, including the $25 image-import and
+$5 SFT holds. Trusted reconciliation of those two resources is scheduled for
+20:00:05 UTC via `/tmp/gameworld-v6-billing-2000.py`, logging to
+`/tmp/gameworld-v6-billing-2000.log`. It leaves the unresolved LiteLLM freeze
+intact. The gateway diagnostics change supersedes the latest source contract;
+retain its evidence and resolve the authenticated usage obligation before
+freezing another protocol or admitting research. Do not reset/fork away the
+freeze, discard the token hold, or repeat the completed SFT smoke test.
