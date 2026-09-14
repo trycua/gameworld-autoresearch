@@ -27,6 +27,7 @@ class FleetSDKBackend:
             vm = template.spec.vm_template
             scaling = resource.spec.autoscaling
             return {"pool": pool.name, "namespace": resource.metadata.namespace,
+                    "template_name": resource.spec.sandbox_template_ref.name,
                     "created_at": resource.metadata.creation_timestamp,
                     "ttl_seconds": resource.spec.ttl_seconds_after_created,
                     "requested_replicas": resource.spec.replicas,
@@ -105,12 +106,15 @@ class FleetLifecycle:
 
     async def preflight(self, required_seconds=1200):
         current = await asyncio.wait_for(self.backend.inspect_pool(self.pool), 30)
-        if (current["namespace"] != self.pool or current["runtime"] != "RuntimeKind.GVISOR"
+        if (current["namespace"] != self.pool or current["template_name"] != self.pool + "-template"
+                or current["runtime"] != "RuntimeKind.GVISOR"
                 or current["image"] != self.controller.contract["spec"]["provenance"]["image"]
                 or current["min_pool_size"] != 0 or current["max_pool_size"] != 20
                 or current["cpu"] != 4 or current["memory"] != "16384Mi"):
             raise ValueError("Fleet template/configuration differs from approved pilot")
-        if not current["ttl_seconds"] or timestamp(current["created_at"]) + current["ttl_seconds"] < time.time() + required_seconds:
+        ttl_seconds = current["ttl_seconds"]
+        if (ttl_seconds is not None
+                and timestamp(current["created_at"]) + ttl_seconds < time.time() + required_seconds):
             raise ValueError("Pool expires before the bounded operation and cleanup window")
         return current
 
@@ -118,7 +122,8 @@ class FleetLifecycle:
         specification = json.loads(job["specification"])
         admitted = job["deadline"] - specification["timeout_seconds"]
         if (claim["pool"] != self.pool or claim["namespace"] != reference["namespace"]
-                or claim["warmpool"] not in ("default", self.pool) or claim["template_name"] != self.pool
+                or claim["warmpool"] not in ("default", self.pool)
+                or claim["template_name"] != self.pool + "-template"
                 or claim["name"] != reference["claim"] or timestamp(claim["created_at"]) < admitted - 2
                 or timestamp(claim["created_at"]) > job["deadline"]
                 or not claim["ttl_seconds"] or claim["ttl_seconds"] > specification["timeout_seconds"]):

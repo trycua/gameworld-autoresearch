@@ -21,11 +21,15 @@ class FakeBackend:
         self.raise_after_create = False
         self.fail_delete = False
         self.min_pool = 0
+        self.pool_ttl = 21600
+        self.pool_created_at = datetime.now(timezone.utc).isoformat()
+        self.template_name = "test-pool-template"
 
     async def inspect_pool(self, name):
-        return {"pool": name, "namespace": name, "runtime": "RuntimeKind.GVISOR", "image": self.image,
+        return {"pool": name, "namespace": name, "template_name": self.template_name,
+                "runtime": "RuntimeKind.GVISOR", "image": self.image,
                 "min_pool_size": self.min_pool, "max_pool_size": 20, "cpu": 4, "memory": "16384Mi",
-                "created_at": datetime.now(timezone.utc).isoformat(), "ttl_seconds": 21600,
+                "created_at": self.pool_created_at, "ttl_seconds": self.pool_ttl,
                 "replicas": int(self.claim is not None), "ready_replicas": int(self.claim is not None),
                 "claims": [self.claim["name"]] if self.claim else []}
 
@@ -34,7 +38,8 @@ class FakeBackend:
 
     async def create_claim(self, pool, name, ttl):
         self.create_calls += 1
-        self.claim = {"pool": pool, "warmpool": "default", "template_name": pool, "namespace": pool, "name": name,
+        self.claim = {"pool": pool, "warmpool": "default", "template_name": self.template_name,
+                      "namespace": pool, "name": name,
                       "created_at": datetime.now(timezone.utc).isoformat(), "ttl_seconds": ttl,
                       "phase": "Bound", "sandbox_name": "test-sandbox"}
         if self.raise_after_create:
@@ -53,7 +58,7 @@ class FakeBackend:
 class SDKMappingTests(unittest.TestCase):
     def test_claim_status_maps_bound_sandbox_without_runtime_fields(self):
         claim = SimpleNamespace(
-            spec=SimpleNamespace(warmpool="default", sandbox_template_ref=SimpleNamespace(name="test-pool"),
+            spec=SimpleNamespace(warmpool="default", sandbox_template_ref=SimpleNamespace(name="test-pool-template"),
                                  ttl_seconds_after_created=600),
             metadata=SimpleNamespace(namespace="test-pool", name="test-claim", creation_timestamp="2026-09-13T00:00:00Z"),
             status=SimpleNamespace(phase="Bound", sandbox=SimpleNamespace(name="test-sandbox")))
@@ -66,7 +71,7 @@ class SDKMappingTests(unittest.TestCase):
             result = asyncio.run(FleetSDKBackend().find_claim("test-pool", "test-claim"))
         self.assertEqual(result["pool"], "test-pool")
         self.assertEqual(result["warmpool"], "default")
-        self.assertEqual(result["template_name"], "test-pool")
+        self.assertEqual(result["template_name"], "test-pool-template")
         self.assertEqual(result["phase"], "Bound")
         self.assertEqual(result["sandbox_name"], "test-sandbox")
         self.assertNotIn("runtime", result)
@@ -154,6 +159,22 @@ class FleetTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.run_async(self.lifecycle.acquire("probe"))
         self.assertEqual(self.backend.create_calls, 0)
+
+    def test_non_terraform_template_prevents_claim_creation(self):
+        self.backend.template_name = "legacy-template"
+        with self.assertRaises(ValueError):
+            self.run_async(self.lifecycle.acquire("probe"))
+        self.assertEqual(self.backend.create_calls, 0)
+
+    def test_non_expiring_pool_passes_preflight(self):
+        self.backend.pool_ttl = None
+        observed = self.run_async(self.lifecycle.preflight(1800))
+        self.assertIsNone(observed["ttl_seconds"])
+
+    def test_pool_expiring_before_cleanup_fails_preflight(self):
+        self.backend.pool_ttl = 60
+        with self.assertRaisesRegex(ValueError, "Pool expires"):
+            self.run_async(self.lifecycle.preflight(1800))
 
     def test_repeat_release_is_idempotent(self):
         self.run_async(self.lifecycle.acquire("probe"))
