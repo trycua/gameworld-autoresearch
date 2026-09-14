@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-ARG WORKER_BASE=ghcr.io/trycua/gameworld-autoresearch@sha256:b1bf500206e200d3a87880f563a3d03e690e2ad4efa5f70b817a11fc2f7a80e6
+ARG WORKER_BASE=ghcr.io/trycua/gameworld-autoresearch@sha256:580630ba689768ffd2393762e1a9f8b03bd42a2965a7b0a1e650ec1b9a7784b8
 FROM ${WORKER_BASE}
 USER root
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
