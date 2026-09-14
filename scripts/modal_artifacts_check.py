@@ -74,7 +74,7 @@ class ArtifactTests(unittest.TestCase):
                                   {"modal_micro_usd": 10_000_000}, 600)
         self.backend = FakeModal()
         self.lifecycle = ModalTrainingLifecycle(self.controller, self.backend)
-        self.run_async(self.lifecycle.prepare("train", workspace="test", app="test", environment="test", image_id="im-test"))
+        self.run_async(self.lifecycle.prepare("train", workspace="test", app="test", environment="gameworld-test", environment_id="en-test", image_id="im-test"))
         self.run_async(self.lifecycle.start("train"))
         self.files = FakeFiles()
         self.artifacts = TrainingArtifacts(self.lifecycle, self.files)

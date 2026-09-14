@@ -19,6 +19,15 @@ class FakeModal:
         self.fail_worker = False
         self.lost_ack = False
         self.fail_termination = False
+        self.environment_budget = "25"
+        self.environment_id = "en-test"
+
+    async def environment(self, workspace, name):
+        return {"workspace": workspace, "name": name, "environment_id": self.environment_id,
+                "restricted": True, "default_member_role": "no-access", "max_concurrent_gpus": 1,
+                "max_concurrent_tasks": 2, "budget_dollars": self.environment_budget,
+                "effective_limit_dollars": self.environment_budget, "usage_dollars": "0",
+                "spend_limit_reached": False, "checked_at": datetime.now(timezone.utc).isoformat()}
 
     async def prices(self, workspace):
         return {"rates": {"gpu_hour_cost_l40s": "1.95", "cpu_hour_cost_sandbox": "0.1419",
@@ -63,10 +72,33 @@ class ModalTrainingTests(unittest.TestCase):
         self.backend = FakeModal()
         self.lifecycle = ModalTrainingLifecycle(self.controller, self.backend)
         self.plan = self.run_async(self.lifecycle.prepare("job-one", workspace="test", app="test-app",
-                                                          environment="test", image_id="im-prebuilt"))
+                                                          environment="gameworld-test", environment_id="en-test", image_id="im-prebuilt"))
 
     def run_async(self, call):
         return asyncio.run(call)
+
+    def test_environment_drift_prevents_provider_create(self):
+        self.backend.environment_budget = "100"
+        with self.assertRaises(ValueError):
+            self.run_async(self.lifecycle.start("job-one"))
+        self.assertEqual(self.backend.creates, 0)
+        self.assertEqual(self.controller.snapshot()["jobs"][0]["state"], "reserved")
+
+    def test_replaced_environment_prevents_provider_create(self):
+        self.backend.environment_id = "en-replaced"
+        with self.assertRaises(ValueError):
+            self.run_async(self.lifecycle.start("job-one"))
+        self.assertEqual(self.backend.creates, 0)
+
+    def test_environment_drift_blocks_worker_but_not_cleanup(self):
+        self.run_async(self.lifecycle.start("job-one"))
+        self.staged_fixture()
+        self.backend.environment_budget = "100"
+        with self.assertRaises(ValueError):
+            self.run_async(self.lifecycle.run_worker("job-one"))
+        self.assertEqual(self.backend.worker_calls, 0)
+        self.run_async(self.lifecycle.terminate("job-one"))
+        self.assertEqual(self.backend.terminations, 1)
 
     def test_compute_quote_uses_sandbox_rates_and_hard_limits(self):
         self.assertEqual(self.plan["quote"]["compute_estimate_micro_usd"], 547600)
@@ -158,7 +190,7 @@ class ModalTrainingTests(unittest.TestCase):
         self.fixture.admit("underfunded", amount=100)
         with self.assertRaises(BudgetRefused):
             self.run_async(self.lifecycle.prepare("underfunded", workspace="test", app="test-app",
-                                                   environment="test", image_id="im-prebuilt"))
+                                                   environment="gameworld-test", environment_id="en-test", image_id="im-prebuilt"))
         self.assertEqual(self.backend.creates, 0)
 
     def test_frozen_campaign_cannot_dispatch(self):
@@ -173,7 +205,7 @@ class ModalTrainingTests(unittest.TestCase):
                 self.run_async(self.lifecycle.start("job-one"))
         with self.assertRaises(LedgerConflict):
             self.run_async(self.lifecycle.prepare("job-one", workspace="test", app="test-app",
-                                                   environment="test", image_id="im-different"))
+                                                   environment="gameworld-test", environment_id="en-test", image_id="im-different"))
         self.assertEqual(self.backend.creates, 0)
 
 

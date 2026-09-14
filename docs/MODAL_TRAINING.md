@@ -94,3 +94,14 @@ provided while those gates are missing.
 
 Dataset upload and checkpoint export are now implemented with offline recovery
 checks; see `docs/MODAL_ARTIFACTS.md`. Actual Modal transfers remain unverified.
+
+## Required environment backstop
+
+Training preparation now requires an exact restricted pilot environment ID and
+fresh read-back of its $25 compute budget, one-GPU/two-task limits and default
+no-access role. Creation and worker execution recheck these settings. Cleanup
+remains available if the settings change. The attempted live setup was denied
+because these credentials are not a workspace manager; no unrestricted fallback
+was used. See `docs/MODAL_ENVIRONMENT.md` for the manager action and the important
+limits of monthly provider compute budgets. This does not complete the campaign's
+cumulative all-in budget gate.

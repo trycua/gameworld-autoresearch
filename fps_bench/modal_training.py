@@ -9,6 +9,7 @@ import time
 
 from fps_bench.campaign_ledger import BudgetRefused, LedgerConflict
 from fps_bench.evaluation_contract import canonical, digest
+from fps_bench.modal_environment import inspect_environment, validate_environment
 
 
 GPU = "L40S"
@@ -44,6 +45,9 @@ def sandbox_options(plan):
 
 
 class ModalSDKBackend:
+    async def environment(self, workspace, name):
+        return await inspect_environment(workspace, name)
+
     async def prices(self, workspace_name):
         import modal
         workspace = await modal.Workspace.from_context().hydrate.aio()
@@ -68,6 +72,8 @@ class ModalSDKBackend:
 
     async def create(self, plan):
         import modal
+        validate_environment(await self.environment(plan["workspace"], plan["environment"]),
+                             plan["environment"], plan["environment_id"])
         current = await self.prices(plan["workspace"])
         refreshed = compute_reservation(current["rates"], plan["seconds"], current["checked_at"])
         if refreshed["required_reservation_micro_usd"] > plan["quote"]["required_reservation_micro_usd"]:
@@ -117,11 +123,15 @@ class ModalTrainingLifecycle:
                 raise LedgerConflict("No prepared Modal launch")
             return job, dict(launch), json.loads(launch["plan"])
 
-    async def prepare(self, job_id, *, workspace, app, environment, image_id):
+    async def prepare(self, job_id, *, workspace, app, environment, environment_id, image_id):
         if not re.fullmatch(r"im-[A-Za-z0-9]+", image_id):
             raise ValueError("Only an already-built immutable Modal image ID is accepted")
         if any(not isinstance(value, str) or not value for value in (workspace, app, environment)):
             raise ValueError("Explicit Modal workspace/app/environment required")
+        if not isinstance(environment_id, str) or not environment_id.startswith("en-"):
+            raise ValueError("Pinned dedicated environment ID required")
+        guard = validate_environment(await asyncio.wait_for(self.backend.environment(workspace, environment), 30),
+                                     environment, environment_id)
         price = await asyncio.wait_for(self.backend.prices(workspace), 30)
         with self.controller.ledger.transaction() as connection:
             self.controller._controller(connection, admission=True)
@@ -135,11 +145,11 @@ class ModalTrainingLifecycle:
                 raise BudgetRefused("Modal job hold does not cover the compute reservation")
             campaign = connection.execute("SELECT id FROM campaign").fetchone()[0]
             name = "gw-train-" + digest(canonical([campaign, job_id]))[:24]
-            identity = {"workspace": workspace, "app": app, "environment": environment, "image_id": image_id,
+            identity = {"workspace": workspace, "app": app, "environment": environment, "environment_id": environment_id, "image_id": image_id,
                         "name": name, "seconds": seconds, "assignment": specification["assignment"],
                         "contract_sha256": self.controller.contract_hash}
             tags = {"campaign": campaign, "job": job_id, "identity": digest(canonical(identity))}
-            plan = {**identity, "tags": tags, "quote": quote}
+            plan = {**identity, "tags": tags, "quote": quote, "environment_guard": guard}
             existing = connection.execute("SELECT plan FROM modal_training_launches WHERE job_id=?", (job_id,)).fetchone()
             if existing:
                 saved = json.loads(existing["plan"])
@@ -181,6 +191,8 @@ class ModalTrainingLifecycle:
             compute_reservation(plan["quote"]["rates"], plan["seconds"], plan["quote"]["checked_at"])
             if job["deadline"] - time.time() < plan["seconds"] - 5:
                 raise BudgetRefused("Prepared timeout no longer fits the admitted job deadline")
+            validate_environment(await asyncio.wait_for(self.backend.environment(plan["workspace"], plan["environment"]), 30),
+                                 plan["environment"], plan["environment_id"])
             self.controller.begin_dispatch(job_id)
             observed = await asyncio.wait_for(self.backend.create(plan), 120)
         if observed is None:
@@ -195,6 +207,8 @@ class ModalTrainingLifecycle:
         self.acknowledge(job_id, observed)
         if observed.get("returncode") is not None:
             raise LedgerConflict("Sandbox already exited")
+        validate_environment(await asyncio.wait_for(self.backend.environment(plan["workspace"], plan["environment"]), 30),
+                             plan["environment"], plan["environment_id"])
         with self.controller.ledger.transaction() as connection:
             self.controller._controller(connection, admission=True)
             current = self.controller._job(connection, job_id)
