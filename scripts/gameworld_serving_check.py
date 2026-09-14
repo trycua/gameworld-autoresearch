@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sys
+import subprocess
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -282,6 +284,14 @@ class ModalServerCommandTests(unittest.TestCase):
         self.assertIn("--max-loras 2", shell)
         self.assertIn("model-parent=/input/parent-adapter", shell)
         self.assertIn("model-child=/input/adapter", shell)
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "output"
+            runnable = shell.replace("/output", str(output)).replace("nohup vllm", "nohup true")
+            delayed_mkdir = 'mkdir() { sleep 0.2; command mkdir "$@"; }; '
+            completed = subprocess.run(["bash", "-c", delayed_mkdir + runnable],
+                                       capture_output=True, text=True, timeout=5)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertTrue((output / "server.pid").read_text().strip().isdigit())
 
 
 if __name__ == "__main__":

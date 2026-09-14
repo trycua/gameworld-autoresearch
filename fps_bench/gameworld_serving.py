@@ -149,7 +149,7 @@ class ModalServingBackend:
                             "--lora-modules", *loras])
         shell = " ".join(__import__("shlex").quote(value) for value in command)
         process = await sandbox.exec.aio(
-            "bash", "-lc", f"mkdir -p /output && nohup {shell} >/output/server.log 2>&1 </dev/null & "
+            "bash", "-lc", f"mkdir -p /output || exit 1; nohup {shell} >/output/server.log 2>&1 </dev/null & "
             "echo $! >/output/server.pid",
             timeout=30, env={"VLLM_API_KEY": api_key}, secrets=[])
         stdout, stderr, returncode = await asyncio.gather(
