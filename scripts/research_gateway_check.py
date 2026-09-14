@@ -41,12 +41,13 @@ class GatewayTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.ledger = CampaignLedger(Path(self.directory.name) / "ledger.sqlite")
         self.ledger.initialize("gateway-tests")
+        self.ledger.remove_token_budget()
         self.calls = []
         self.response = json.dumps({"id": "test", "choices": [], "usage": {
             "prompt_tokens": 30, "completion_tokens": 10, "total_tokens": 40}}).encode()
         self.reconciler = Reconciler()
         self.server = ResearchGateway(("127.0.0.1", 0), self.ledger, "client-" + "x" * 40,
-                                      "upstream-secret-key", self.reconciler, self.transport)
+                                      "upstream-secret-key", self.transport)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.addCleanup(self.stop)
@@ -80,40 +81,33 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
         self.assertEqual(self.ledger.snapshot()["reservations"], [])
 
-    def test_budget_refusal_never_contacts_provider(self):
-        self.ledger.reserve("existing", "litellm_tokens", 1_000_000_000, int(time.time()) + 3600)
+    def test_modal_freeze_never_contacts_provider(self):
+        self.ledger.freeze("Provider charges exceed retained Modal allocation")
         self.assertEqual(self.post()[0], 429)
         self.assertEqual(self.calls, [])
 
-    def test_success_settles_authenticated_usage_before_reply(self):
+    def test_success_does_not_reserve_or_settle_tokens(self):
         status, body, headers = self.post()
         self.assertEqual(status, 200)
         self.assertEqual(body, self.response)
-        held = self.ledger.snapshot()["reservations"]
-        self.assertEqual(len(held), 1)
-        self.assertEqual(held[0]["amount"], REQUEST_HOLD)
-        self.assertEqual(held[0]["actual"], 40)
-        self.assertEqual(held[0]["state"], "settled")
-        self.assertEqual(held[0]["id"], headers["X-Gameworld-Dispatch-ID"])
-        self.assertEqual(self.reconciler.calls[0][0], headers["X-Gameworld-Dispatch-ID"])
-        self.assertEqual(self.calls[0][1], "upstream-secret-key")
+        self.assertEqual(self.ledger.snapshot()["reservations"], [])
+        self.assertEqual(self.reconciler.calls, [])
+        self.assertTrue(headers["X-Gameworld-Dispatch-ID"].startswith("litellm:"))
         self.assertNotIn(b"upstream-secret-key", body)
 
-    def test_duplicate_client_requests_are_separately_reserved(self):
+    def test_duplicate_client_requests_do_not_reserve_tokens(self):
         self.assertEqual(self.post()[0], 200)
         self.assertEqual(self.post()[0], 200)
         self.assertEqual(len(self.calls), 2)
-        self.assertEqual(len(self.ledger.snapshot()["reservations"]), 2)
+        self.assertEqual(self.ledger.snapshot()["reservations"], [])
 
-    def test_real_driver_source_fits_with_conservative_token_reservation(self):
+    def test_real_driver_source_fits_without_token_reservation(self):
         source = Path("cua-driver/rust/crates/platform-linux/src/input/mod.rs").read_text()
         self.assertGreater(len(source.encode()), 65_536)
         body = {"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": source}]}
-        encoded_bytes = len(json.dumps(body).encode())
-        self.assertLess(encoded_bytes, MAX_BODY)
-        self.assertGreaterEqual(ATTEMPT_HOLD, encoded_bytes + 16_384)
+        self.assertLess(len(json.dumps(body).encode()), MAX_BODY)
         self.assertEqual(self.post(body)[0], 200)
-        self.assertEqual(self.ledger.snapshot()["reservations"][0]["amount"], REQUEST_HOLD)
+        self.assertEqual(self.ledger.snapshot()["reservations"], [])
 
     def test_oversized_source_is_rejected_before_budget_or_provider(self):
         body = {"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "x" * MAX_BODY}]}
@@ -121,55 +115,43 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
         self.assertEqual(self.ledger.snapshot()["reservations"], [])
 
-    def test_reconciliation_failure_freezes_and_retains_hold(self):
-        self.reconciler.error = ValueError("spend log unavailable")
-        status, _, _ = self.post()
-        self.assertEqual(status, 502)
-        snapshot = self.ledger.snapshot()
-        self.assertTrue(snapshot["campaign"]["frozen"])
-        self.assertEqual(snapshot["reservations"][0]["state"], "held")
-
-    def test_timeout_freezes_and_keeps_reservation(self):
+    def test_timeout_does_not_freeze_or_reserve(self):
         self.response = TimeoutError("upstream-secret-key must never reach response")
         status, body, _ = self.post()
         self.assertEqual(status, 502)
         self.assertNotIn(b"upstream-secret-key", body)
-        self.assertTrue(self.ledger.snapshot()["campaign"]["frozen"])
-        self.assertEqual(self.post()[0], 429)
-        self.assertEqual(len(self.calls), 1)
+        self.assertFalse(self.ledger.snapshot()["campaign"]["frozen"])
+        self.assertEqual(self.ledger.snapshot()["reservations"], [])
         with self.ledger.transaction() as connection:
             failure = json.loads(connection.execute(
-                "SELECT payload FROM events WHERE kind='dispatch_unresolved'").fetchone()[0])
+                "SELECT payload FROM events WHERE kind='dispatch_failed'").fetchone()[0])
         self.assertEqual(failure["phase"], "upstream_transport")
         self.assertEqual(failure["error_type"], "TimeoutError")
-        self.assertIsNone(failure["call_id"])
         self.assertNotIn("upstream-secret-key", json.dumps(failure))
+        self.response = b'{"choices":[]}'
+        self.assertEqual(self.post()[0], 200)
 
     def test_http_failure_records_status_without_response_body(self):
         self.response = error.HTTPError("https://example.com", 503, "upstream-secret-key", {}, None)
         self.assertEqual(self.post()[0], 502)
         with self.ledger.transaction() as connection:
             failure = json.loads(connection.execute(
-                "SELECT payload FROM events WHERE kind='dispatch_unresolved'").fetchone()[0])
+                "SELECT payload FROM events WHERE kind='dispatch_failed'").fetchone()[0])
         self.assertEqual(failure["http_status"], 503)
         self.assertEqual(failure["phase"], "upstream_transport")
         self.assertNotIn("upstream-secret-key", json.dumps(failure))
 
-    def test_missing_usage_retains_call_identity_for_recovery(self):
+    def test_missing_usage_is_forwarded_without_freezing(self):
         self.response = b'{"choices":[]}'
-        self.assertEqual(self.post()[0], 502)
+        self.assertEqual(self.post()[0], 200)
         with self.ledger.transaction() as connection:
             received = json.loads(connection.execute(
                 "SELECT payload FROM events WHERE kind='upstream_response_received'").fetchone()[0])
-            failure = json.loads(connection.execute(
-                "SELECT payload FROM events WHERE kind='dispatch_unresolved'").fetchone()[0])
-        self.assertEqual(failure["call_id"], received["call_id"])
-        self.assertEqual(failure["phase"], "usage_validation")
-
-    def test_missing_usage_fails_closed(self):
-        self.response = b'{"choices":[]}'
-        self.assertEqual(self.post()[0], 502)
-        self.assertTrue(self.ledger.snapshot()["campaign"]["frozen"])
+            event = json.loads(connection.execute(
+                "SELECT payload FROM events WHERE kind='usage_unavailable'").fetchone()[0])
+        self.assertEqual(event["id"], received["id"])
+        self.assertFalse(self.ledger.snapshot()["campaign"]["frozen"])
+        self.assertEqual(self.ledger.snapshot()["reservations"], [])
 
     def test_stream_usage_preserves_sse_bytes(self):
         self.response = b'data: {"choices":[]}\n\ndata: {"usage":{"prompt_tokens":30,"completion_tokens":10,"total_tokens":40}}\n\ndata: [DONE]\n\n'

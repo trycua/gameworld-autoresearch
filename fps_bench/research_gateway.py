@@ -1,4 +1,4 @@
-"""Local research relay with durable admission and authenticated settlement."""
+"""Authenticated research relay; token accounting belongs to existing LiteLLM telemetry."""
 
 import argparse
 from datetime import datetime, timezone
@@ -230,16 +230,15 @@ class LiteLLMSpendReconciler:
 class ResearchGateway(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address, ledger, client_token, upstream_key, reconciler, transport=upstream_request):
+    def __init__(self, address, ledger, client_token, upstream_key, transport=upstream_request):
         if (not client_token or len(client_token) < 32 or not upstream_key
-                or len(upstream_key) < 16 or reconciler is None):
-            raise ValueError("Gateway requires client, inference and reconciliation credentials")
-        if len({client_token, upstream_key, reconciler.admin_key}) != 3:
-            raise ValueError("Gateway client, virtual and admin credentials must be distinct")
+                or len(upstream_key) < 16):
+            raise ValueError("Gateway requires client and inference credentials")
+        if client_token == upstream_key:
+            raise ValueError("Gateway client and virtual credentials must be distinct")
         self.ledger = ledger
         self.client_token = client_token
         self.upstream_key = upstream_key
-        self.reconciler = reconciler
         self.transport = transport
         self.ledger.snapshot()
         super().__init__(address, ResearchHandler)
@@ -307,7 +306,14 @@ class ResearchHandler(BaseHTTPRequestHandler):
             return
         dispatch_id = f"litellm:{uuid4()}"
         try:
-            self.server.ledger.reserve(dispatch_id, "litellm_tokens", REQUEST_HOLD, int(time.time()) + 600)
+            with self.server.ledger.transaction() as connection:
+                campaign = connection.execute("SELECT frozen FROM campaign").fetchone()
+                if campaign['frozen']:
+                    raise BudgetRefused("Campaign frozen")
+                if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='controller'").fetchone():
+                    controller = connection.execute("SELECT stopped,deadline FROM controller").fetchone()
+                    if controller and (controller['stopped'] or controller['deadline'] <= time.time()):
+                        raise BudgetRefused("Campaign stopped or expired")
         except BudgetRefused:
             self.respond(429, {"error": "Campaign admission refused"})
             return
@@ -330,33 +336,20 @@ class ResearchHandler(BaseHTTPRequestHandler):
                 call_id = observed_call_id
                 self.server.event("upstream_response_received", {"id": dispatch_id, "call_id": call_id})
             response = upstream["payload"]
-            phase = "usage_validation"
-            observation = usage_observation(response, body.get("stream", False))
-            self.server.event("usage_observed", {"id": dispatch_id, **observation,
-                                                "reconciled": False})
-            phase = "spend_reconciliation"
-            settlement = self.server.reconciler.reconcile(call_id, observation, started_at)
-            phase = "ledger_settlement"
-            with self.server.ledger.transaction() as connection:
-                self.server.ledger._settle_in_transaction(
-                    connection, dispatch_id, settlement["settled_tokens"], settlement["receipt"])
-                self.server.ledger._event(connection, "usage_reconciled", {
-                    "id": dispatch_id, "call_id": call_id,
-                    "response_tokens": observation["total_tokens"],
-                    "settled_tokens": settlement["settled_tokens"],
-                    "attempted_retries": settlement["attempted_retries"],
-                    "failed_attempt_rows": settlement["failed_attempt_rows"],
-                    "receipt": settlement["receipt"],
-                })
+            try:
+                observation = usage_observation(response, body.get("stream", False))
+            except (ValueError, KeyError, TypeError, UnicodeError):
+                self.server.event("usage_unavailable", {"id": dispatch_id, "accounting": "external_litellm_telemetry"})
+            else:
+                self.server.event("usage_observed", {"id": dispatch_id, **observation, "reconciled": False})
         except Exception as error:
-            self.server.ledger.freeze(f"Ambiguous upstream usage for {dispatch_id}")
             failure = {"id": dispatch_id, "phase": phase, "error_type": type(error).__name__,
                        "elapsed_ms": max(0, int((time.time() - started_at) * 1000)), "call_id": call_id}
             status = getattr(error, "code", None)
             if type(status) is int and 100 <= status <= 599:
                 failure["http_status"] = status
-            self.server.event("dispatch_unresolved", failure)
-            self.respond(502, {"error": "Upstream usage unresolved; campaign frozen"}, dispatch_id=dispatch_id)
+            self.server.event("dispatch_failed", failure)
+            self.respond(502, {"error": "Upstream research request failed"}, dispatch_id=dispatch_id)
             return
         content_type = "text/event-stream" if body.get("stream") else "application/json"
         self.respond(200, response, content_type, dispatch_id)
@@ -367,13 +360,10 @@ def main():
     parser.add_argument("--db", required=True)
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
-    reconciler = LiteLLMSpendReconciler(
-        os.environ.get("LITELLM_MASTER_KEY", ""),
-        os.environ.get("LITELLM_RESEARCH_KEY_ALIAS", ""))
     server = ResearchGateway(
         ("127.0.0.1", args.port), CampaignLedger(args.db),
         os.environ.get("GAMEWORLD_RESEARCH_TOKEN", ""),
-        os.environ.get("LITELLM_RESEARCH_KEY", ""), reconciler)
+        os.environ.get("LITELLM_RESEARCH_KEY", ""))
     try:
         server.serve_forever()
     finally:

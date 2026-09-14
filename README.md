@@ -104,10 +104,12 @@ Current tag: `cua-driver-bench-20260830-hold` (vendored driver: press_key hold_m
 The new isolated research profile uses Astra, Sol, Terra and Luna through the Cua
 LiteLLM gateway, with `pi-dynamic-workflows` for `/deep-research`.
 See [PI_RESEARCH.md](docs/PI_RESEARCH.md) for setup, credentials and role routing.
-Approved campaign allowances are 1 billion LiteLLM tokens and USD 2,000 for Modal.
-The local gateway and campaign controller own reservations; authenticated provider
-settlement and live cleanup verification remain launch gates. This profile does
-not launch the legacy L-platform loop or paid training by itself.
+The Modal cap remains USD 2,000 ($1,800 normal work and $200 cleanup reserve).
+LiteLLM has no campaign or workflow token budget and no token reservations;
+the user monitors usage in existing LiteLLM telemetry. The authenticated research
+relay does not need a LiteLLM admin credential or usage settlement to forward
+responses. Modal billing reconciliation and live cleanup remain launch gates.
+This profile does not launch the legacy L-platform loop or paid training by itself.
 
 A private SearXNG pilot is deployed in `gvisor-dev`. See
 [deployment instructions](infra/searxng/README.md) and the

@@ -57,7 +57,6 @@ Return exactly one JSON object matching this shape:
     "modal_micro_usd": 0,
     "modal_training_micro_usd": 0,
     "modal_serving_micro_usd": 0,
-    "litellm_tokens": 200000,
     "desktop_episodes": 68,
     "timeout_seconds": 900
   }

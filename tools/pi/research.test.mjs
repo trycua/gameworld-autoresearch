@@ -9,7 +9,7 @@ import { resolveResearchModel } from './research-routing.mjs';
 const root = resolve(import.meta.dirname, '../..');
 const readConfig = async (name) => JSON.parse(await readFile(resolve(root, 'configs/pi', name), 'utf8'));
 
-test('four models use the metered local gateway and a separate credential', async () => {
+test('four models use the authenticated local gateway and a separate credential', async () => {
   const { providers } = await readConfig('models.json');
   assert.deepEqual(Object.keys(providers), ['cua-litellm']);
   const provider = providers['cua-litellm'];
@@ -60,13 +60,13 @@ test('installed pi loads the workflow, routing extension and research instructio
   assert.ok(loader.getAgentsFiles().agentsFiles.some((file) => file.content.includes('GameWorld research supervisor')));
 });
 
-test('campaign tokens and Modal dollars use separate controller gates', async () => {
+test('tokens use external telemetry while Modal retains its cap', async () => {
   const limits = await readConfig('research-limits.json');
-  assert.equal(limits.litellm.total_token_limit, 1000000000);
-  assert.equal(limits.litellm.scope, 'campaign');
+  assert.equal(limits.litellm.total_token_limit, null);
+  assert.equal(limits.litellm.scope, 'external_telemetry');
   assert.equal(limits.litellm.dollar_budget, null);
   assert.equal(limits.modal.spending_cap_usd, 2000);
   assert.equal(limits.modal.normal_work_allowance_usd + limits.modal.shutdown_reserve_usd, 2000);
-  assert.equal(limits.litellm.enforcement_status, 'controller_gateway_authenticated_spend_logs_with_retry_upper_bound');
+  assert.equal(limits.litellm.enforcement_status, 'disabled_by_user');
   assert.equal(limits.modal.enforcement_status, 'campaign_controller_reservations_pending_live_reconciliation');
 });

@@ -29,14 +29,10 @@ record returned model/deployment identities rather than assuming exact backend p
 Read docs/plans/2026-09-13-gameworld-joint-autoresearch.md before proposing experiments.
 The $2,000 spending cap is focused on Modal training/inference. Do not add LiteLLM
 cost gates or mistake its zero-priced usage counters for a Modal budget ledger.
-The approved LiteLLM campaign limit is 1,000,000,000 total input plus output tokens
-across all four aliases, including cached input once and retries. It is not a
-per-minute or per-workflow allowance. See configs/pi/research-limits.json. The
-local research gateway reserves requests in the canonical campaign ledger;
-per-workflow limits alone do not enforce that cap. The gateway settles against
-authenticated LiteLLM spend logs and retains conservative bounds for hidden retries;
-missing or inconsistent evidence freezes campaign admission.
-Token/concurrency/time limits here are operational bounds, not USD enforcement.
+The user removed the LiteLLM campaign and workflow token budgets on September 14,
+2026. Do not reserve tokens or stop on unavailable usage records. The user monitors
+existing LiteLLM telemetry. Keep model allowlists, browser isolation, concurrency,
+request/output size bounds and timeouts. See configs/pi/research-limits.json.
 The campaign controller owns aggregate Modal reservations, but authenticated live
 billing reconciliation is still a launch gate. Do not launch paid Modal jobs or an
 unattended optimization loop from the interactive profile itself. The credentialed

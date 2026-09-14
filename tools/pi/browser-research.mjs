@@ -188,7 +188,7 @@ export async function runBrowserResearch({ question, mode = 'hybrid', angles, ou
     const result = await runWorkflow(researchScript(config), {
       cwd: ROOT, agent: runner, runId, args: { question, angles: count }, modelRegistry,
       concurrency: config.concurrency, maxAgents: count + 3, agentRetries: 0,
-      agentTimeoutMs: config.worker_timeout_ms, tokenBudget: config.token_budget,
+      agentTimeoutMs: config.worker_timeout_ms, tokenBudget: null,
       signal: combined, persistLogs: false,
       onPhase: (phase) => { record({ type: 'phase', phase }); onPhase(phase); },
       onAgentUsage: (usage) => record({ type: 'agent_usage', ...usage }),

@@ -124,7 +124,6 @@ def load_policy(path=DEFAULT_POLICY, catalog_path=DEFAULT_CATALOG):
     expected_limits = {
         "modal_micro_usd_total": LIMITS["modal_micro_usd"][0],
         "modal_micro_usd_normal": LIMITS["modal_micro_usd"][1],
-        "litellm_tokens": LIMITS["litellm_tokens"][0],
         "desktop_concurrency": 2,
         "training_concurrency": 1,
         "baseline_serving_micro_usd": 15_000_000,
@@ -311,14 +310,12 @@ def validate_proposal(proposal, policy, context, baseline):
     budget = proposal["budget"]
     if (not isinstance(budget, dict)
             or set(budget) != {"modal_micro_usd", "modal_training_micro_usd",
-                               "modal_serving_micro_usd", "litellm_tokens",
+                               "modal_serving_micro_usd",
                                "desktop_episodes", "timeout_seconds"}
             or any(type(value) is not int or value < 0 for value in budget.values())
             or not 1 <= budget["desktop_episodes"] <= 136
-            or budget["litellm_tokens"] == 0
             or not 60 <= budget["timeout_seconds"] <= 1800
-            or budget["modal_micro_usd"] > policy["limits"]["modal_micro_usd_normal"]
-            or budget["litellm_tokens"] > policy["limits"]["litellm_tokens"]):
+            or budget["modal_micro_usd"] > policy["limits"]["modal_micro_usd_normal"]):
         raise ValueError("Proposal budget is outside campaign bounds")
     experiment = proposal["experiment"]
     development = set(context["splits"]["development"])
@@ -410,6 +407,7 @@ class GameWorldResearchSupervisor:
 
     def initialize(self, campaign):
         self.ledger.initialize(campaign)
+        self.ledger.remove_token_budget()
         with self.ledger.transaction() as connection:
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS gameworld_research ("
@@ -483,10 +481,6 @@ class GameWorldResearchSupervisor:
             maximum = self.policy["candidate_policy"]["maximum_candidates"]
             if connection.execute("SELECT COUNT(*) FROM gameworld_hypotheses").fetchone()[0] >= maximum:
                 raise BudgetRefused("GameWorld candidate limit reached")
-            committed, _ = self.ledger._usage(connection, "litellm_tokens")
-            limit = connection.execute("SELECT total FROM limits WHERE resource='litellm_tokens'").fetchone()[0]
-            if committed + proposal["budget"]["litellm_tokens"] > limit:
-                raise BudgetRefused("Proposal exceeds remaining LiteLLM allowance")
             round_id = connection.execute("SELECT COALESCE(MAX(round),0)+1 FROM gameworld_hypotheses").fetchone()[0]
             connection.execute(
                 "INSERT INTO gameworld_hypotheses VALUES (?,?,?,?,?,'queued')",

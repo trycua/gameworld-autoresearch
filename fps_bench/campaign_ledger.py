@@ -35,13 +35,17 @@ def accounting_totals(snapshot):
         observed += sum(row["actual"] for row in snapshot["prior_usage"] if row["resource"] == resource)
         reserved = sum(row["amount"] for row in snapshot["reservations"]
                        if row["resource"] == resource and row["state"] == "held")
+        retired = sum(row["amount"] for row in snapshot["reservations"]
+                      if row["resource"] == resource and row["state"] == "retired_token_policy")
         if resource == "modal_micro_usd":
             groups = snapshot.get("reconciled_modal_groups", [])
             observed += sum(row["observed"] for row in groups)
             reserved += sum(max(0, row["floor"] - row["observed"]) for row in groups)
-        if observed + reserved != snapshot["resources"][resource]["committed"]:
+        if observed + reserved + retired != snapshot["resources"][resource]["committed"]:
             raise LedgerConflict("Telemetry accounting does not match committed allowance")
         totals[resource] = {"observed": observed, "reserved": reserved}
+        if retired:
+            totals[resource]["retired_unmeasured"] = retired
     return totals
 
 
@@ -127,6 +131,46 @@ class CampaignLedger:
         with self.transaction() as connection:
             return self._reserve_in_transaction(connection, reservation_id, resource, amount, expires_at, purpose)
 
+    @staticmethod
+    def _tokens_disabled(connection):
+        return bool(connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='token_budget_removal'"
+        ).fetchone() and connection.execute("SELECT 1 FROM token_budget_removal").fetchone())
+
+    def remove_token_budget(self):
+        with self.transaction() as connection:
+            if self._tokens_disabled(connection):
+                return {"removed": True, "already_removed": True}
+            campaign = connection.execute("SELECT * FROM campaign").fetchone()
+            if campaign is None:
+                raise LedgerConflict("Existing campaign required")
+            connection.execute("CREATE TABLE IF NOT EXISTS token_budget_removal ("
+                               "singleton INTEGER PRIMARY KEY CHECK(singleton=1), authorization TEXT NOT NULL)")
+            connection.execute("INSERT INTO token_budget_removal VALUES (1,?)",
+                               ("User removed token budgets; monitor existing LiteLLM telemetry",))
+            retired = [row['id'] for row in connection.execute(
+                "SELECT id FROM reservations WHERE resource='litellm_tokens' AND state='held' ORDER BY id")]
+            connection.execute("UPDATE reservations SET state='retired_token_policy' "
+                               "WHERE resource='litellm_tokens' AND state='held'")
+            prefix = "Ambiguous upstream usage for "
+            dispatch = campaign['reason'].removeprefix(prefix)
+            total, normal = self._usage(connection, 'modal_micro_usd')
+            limits = connection.execute("SELECT total,normal FROM limits WHERE resource='modal_micro_usd'").fetchone()
+            modal_overrun = connection.execute(
+                "SELECT 1 FROM reservations WHERE resource='modal_micro_usd' AND actual>amount").fetchone()
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE name='modal_reconciliation_groups'").fetchone():
+                modal_overrun = modal_overrun or connection.execute(
+                    "SELECT 1 FROM modal_reconciliation_groups WHERE excess>0").fetchone()
+            modal_safe = total <= limits['total'] and normal <= limits['normal'] and not modal_overrun
+            cleared = bool(campaign['frozen'] and campaign['reason'].startswith(prefix)
+                           and dispatch in retired and modal_safe)
+            if cleared:
+                connection.execute("UPDATE campaign SET frozen=0,reason=''")
+            result = {"removed": True, "retired_reservations": retired, "token_freeze_cleared": cleared,
+                      "measured_usage_claimed": False, "modal_policy_changed": False}
+            self._event(connection, "token_budget_removed", result)
+            return result
+
     def _reserve_in_transaction(self, connection, reservation_id, resource, amount, expires_at, purpose="normal"):
         positive_integer(amount, "amount")
         positive_integer(expires_at, "expires_at")
@@ -134,6 +178,8 @@ class CampaignLedger:
             raise ValueError("reservation_id must be nonempty")
         if resource not in LIMITS or purpose not in ("normal", "shutdown"):
             raise ValueError("Unknown resource or purpose")
+        if resource == "litellm_tokens" and self._tokens_disabled(connection):
+            raise BudgetRefused("Token reservations are disabled; use LiteLLM telemetry")
         if resource != "modal_micro_usd" and purpose != "normal":
             raise ValueError("Shutdown reserve is only for Modal")
         existing = connection.execute("SELECT * FROM reservations WHERE id=?", (reservation_id,)).fetchone()
@@ -217,7 +263,8 @@ class CampaignLedger:
                                (usage_id, resource, accounted, actual, receipt))
             total, normal = self._usage(connection, resource)
             limits = connection.execute("SELECT * FROM limits WHERE resource=?", (resource,)).fetchone()
-            exceeded = total > limits["total"] or normal > limits["normal"]
+            exceeded = ((total > limits["total"] or normal > limits["normal"])
+                        and not (resource == 'litellm_tokens' and self._tokens_disabled(connection)))
             if exceeded:
                 connection.execute("UPDATE campaign SET frozen=1,reason=?",
                                    ("Imported prior provider usage exceeds campaign allowance",))
@@ -246,6 +293,9 @@ class CampaignLedger:
                     "remaining": max(0, limits["total"] - total),
                     "normal_remaining": max(0, min(limits["normal"] - normal, limits["total"] - total)),
                 }
+                if limits["resource"] == "litellm_tokens" and self._tokens_disabled(connection):
+                    resources[limits["resource"]].update(
+                        enforced=False, total_limit=None, normal_limit=None, remaining=None, normal_remaining=None)
             reservations = [dict(row) for row in connection.execute("SELECT * FROM reservations ORDER BY id")]
             reconciled = []
             if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='modal_reconciliation_groups'").fetchone():

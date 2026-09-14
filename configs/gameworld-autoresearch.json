@@ -50,7 +50,6 @@
   "limits": {
     "modal_micro_usd_total": 2000000000,
     "modal_micro_usd_normal": 1800000000,
-    "litellm_tokens": 1000000000,
     "desktop_concurrency": 2,
     "training_concurrency": 1,
     "baseline_serving_micro_usd": 15000000,

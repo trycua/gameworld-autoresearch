@@ -57,7 +57,7 @@ class PiResearchExecutor:
         self.environment = research_environment(environment)
         Path(self.environment["HOME"]).mkdir(parents=True, exist_ok=True)
         if len(self.environment["GAMEWORLD_RESEARCH_TOKEN"]) < 32:
-            raise ValueError("Pi research requires the local metered gateway credential")
+            raise ValueError("Pi research requires the local authenticated gateway credential")
         if not self.program.is_file() or self.program.is_symlink():
             raise ValueError("Pinned Pi proposal program is missing or unsafe")
 
@@ -322,8 +322,6 @@ class GameWorldResearchWorker:
                 or snapshot["next"] is not None or snapshot["joint_ready"]):
             return False
         history = self._history()
-        if snapshot["budget"]["resources"]["litellm_tokens"]["normal_remaining"] < 1:
-            return False
         if (self.recommended_track(history) == "model"
                 and snapshot["budget"]["resources"]["modal_micro_usd"]["normal_remaining"] < 2):
             return False

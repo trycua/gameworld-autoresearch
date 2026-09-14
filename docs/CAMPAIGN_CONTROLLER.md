@@ -105,7 +105,7 @@ requires `--reason` and clearly reports `provider_cleanup_not_executed=true`.
 ## Budget and telemetry integration boundaries
 
 GameWorld training and serving admission need a Modal reservation; research
-admission needs a LiteLLM token reservation. Fleet driver builds, rollouts and
+requests use external LiteLLM telemetry without token reservations. Fleet driver builds, rollouts and
 evaluations carry no Modal reservation because their claims cannot authenticate or
 reconcile Modal billing. Their shared Qwen inference deployment must instead be
 covered once by its owning serving admission. Fleet jobs still require a desktop

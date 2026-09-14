@@ -278,3 +278,31 @@ expected validation HTTP 400 without inference, confirming the API path is
 reachable now but not explaining the original error. The campaign remains
 frozen, its token hold is unchanged, and the 20:00 UTC Modal reconciliation
 process remains scheduled.
+
+## User removed the token budget
+
+The user explicitly removed token reservations and the LiteLLM token budget,
+preferring existing LiteLLM telemetry for usage monitoring. This supersedes the
+earlier one-billion-token requirement, full-reservation recovery question and
+research-accounting blocker. Modal limits remain unchanged.
+
+The relay no longer reserves or settles tokens, requires an admin credential,
+or freezes the campaign when usage is missing. Pi's workflow token budget and
+proposal token allocations are removed. Authentication, model allowlists,
+request/output bounds, timeouts, concurrency and Modal billing safeguards remain.
+
+The canonical v6 ledger was migrated with a SQLite backup and immutable
+before/after receipts under `token-policy-removal-20260914`. The unresolved
+3,342,336-token hold is retired historical evidence, not measured usage or an
+active reservation. Only its token-specific freeze was cleared. All Modal
+reservations, prior usage and reconciliation groups remained unchanged; the
+Modal commitment is still $311.013141.
+
+A real Luna request through the updated relay returned HTTP 200 and `READY`
+with provider-reported usage of 15 tokens. The probe created no reservations,
+left Modal accounting unchanged and did not freeze the campaign. Evidence:
+`token-policy-removal-20260914/relay-probe.json`. The temporary probe relay was
+stopped afterward. No driver/GRPO or full campaign launch was performed during
+this policy change. The existing 20:00 UTC Modal reconciliation remains scheduled.
+Deploy/freeze updated source and policy artifacts before resuming the campaign;
+the earlier frozen contracts and GPU validation receipts remain immutable.

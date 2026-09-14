@@ -1,13 +1,14 @@
 {
   "schema_version": 1,
   "litellm": {
-    "total_token_limit": 1000000000,
-    "scope": "campaign",
-    "providers": ["cua-litellm"],
-    "accounting": "authenticated LiteLLM spend-log prompt_tokens + completion_tokens; cached prompt tokens count once; hidden retry attempts retain a conservative per-attempt upper bound",
-    "reset": "explicit user approval only",
+    "total_token_limit": null,
+    "scope": "external_telemetry",
+    "providers": [
+      "cua-litellm"
+    ],
+    "accounting": "User monitors existing LiteLLM telemetry; no campaign token reservations or budget",
     "dollar_budget": null,
-    "enforcement_status": "controller_gateway_authenticated_spend_logs_with_retry_upper_bound"
+    "enforcement_status": "disabled_by_user"
   },
   "modal": {
     "spending_cap_usd": 2000,

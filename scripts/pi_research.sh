@@ -7,7 +7,7 @@ if [[ ! -x "$ROOT/tools/pi/node_modules/.bin/pi" || ! -f "$ROOT/.pi-local/agent/
   exit 1
 fi
 if [[ -z "${GAMEWORLD_RESEARCH_TOKEN:-}" ]]; then
-  echo 'Set GAMEWORLD_RESEARCH_TOKEN to the local metered gateway credential; direct LiteLLM access is disabled.' >&2
+  echo 'Set GAMEWORLD_RESEARCH_TOKEN to the local authenticated gateway credential; direct LiteLLM access is disabled.' >&2
   exit 1
 fi
 unset LITELLM_API_KEY LITELLM_MASTER_KEY CUA_CLIENT_ID CUA_CLIENT_SECRET QWEN_API_KEY MODAL_TOKEN_ID MODAL_TOKEN_SECRET

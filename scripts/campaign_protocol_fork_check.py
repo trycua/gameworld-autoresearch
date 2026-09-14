@@ -50,6 +50,14 @@ class CampaignProtocolForkTests(unittest.TestCase):
         self.assertFalse(self.destination.exists())
         self.assertFalse(self.receipt.exists())
 
+    def test_fork_preserves_removed_token_policy(self):
+        self.ledger.reserve('litellm:historical', 'litellm_tokens', 100, int(time.time()) + 60)
+        self.ledger.remove_token_budget()
+        fork(self.source, self.destination, 'new-campaign', self.receipt)
+        after = CampaignLedger(self.destination).snapshot()
+        self.assertFalse(after['resources']['litellm_tokens']['enforced'])
+        self.assertEqual(after['reservations'], self.ledger.snapshot()['reservations'])
+
     def test_completed_image_import_hold_carries_forward(self):
         self.ledger.reserve("image-import:one", "modal_micro_usd", 100, int(time.time()) + 600)
         with self.ledger.transaction() as connection:

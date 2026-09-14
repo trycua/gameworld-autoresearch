@@ -7,11 +7,11 @@ GameWorld browser, Fleet desktop, personal browser or a shared CDP endpoint.
 
 ## Commands
 
-The Pi profile now requires the controller-local metered research relay and
+The Pi profile requires the controller-local authenticated research relay and
 `GAMEWORLD_RESEARCH_TOKEN`. Direct upstream credentials are removed from the
-launcher environment. The trusted relay uses a dedicated virtual key and settles
-authenticated spend-log usage, including conservative hidden-retry bounds, before
-replying. Live deployment evidence remains pending; see `docs/CAMPAIGN_ACCOUNTING.md`.
+launcher environment. The relay uses a dedicated virtual key, without token
+reservations or spend-log settlement. Existing LiteLLM telemetry is the user's
+usage-monitoring surface; see `docs/CAMPAIGN_ACCOUNTING.md`.
 
 Install the pinned dependencies and generate the isolated pi profile:
 
@@ -110,8 +110,8 @@ Defaults in `configs/pi/browser-research.json`:
 - Two gathering workers at most; four-to-five total agents per workflow.
 - 24 browser calls and three search calls per gathering worker.
 - Three minutes per worker, ten minutes per workflow, zero automatic agent retries.
-- 100,000 tokens per workflow; the local gateway separately reserves requests
-  against the 1-billion-token campaign ledger. It does not meter Modal dollars.
+- No workflow or campaign token budget; monitor existing LiteLLM telemetry.
+  Modal dollar reservations remain separate and enforced.
 
 ## Artifacts and tests
 

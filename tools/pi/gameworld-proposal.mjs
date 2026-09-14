@@ -53,7 +53,6 @@ export function proposalCoreSchema(context, sources) {
     hypothesis: { type: 'string', minLength: 1, maxLength: 4000 },
     evidence: evidenceSchema(context),
     references: referenceSchema(sources),
-    litellm_tokens: integer(1, Math.min(200000, context.budget.litellm_tokens.normal_remaining)),
     timeout_seconds: integer(60, 1800),
   };
   if (context.recommended_track === 'driver') {
@@ -102,7 +101,6 @@ export function assembleProposal(core, context, sources, retrievedAt) {
     modal_micro_usd: 0,
     modal_training_micro_usd: 0,
     modal_serving_micro_usd: 0,
-    litellm_tokens: core.litellm_tokens,
     desktop_episodes: context.splits.development.length * context.policy.candidate_policy.development_repeats,
     timeout_seconds: core.timeout_seconds,
   };

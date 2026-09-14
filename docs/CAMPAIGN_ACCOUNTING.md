@@ -5,7 +5,7 @@
 The controller-side ledger is implemented and tested. **Campaign enforcement is
 not complete:** Pi routes through a local admission relay, and the GameWorld Modal
 runner admits, cleans and conservatively reconciles training/serving resources.
-Other provider paths, upstream LiteLLM usage settlement, remote admission and live
+Other provider paths, remote admission and live
 campaign evidence remain incomplete. Do not launch an unattended campaign on the
 strength of this module alone. Linear: CUA-1167.
 
@@ -19,13 +19,13 @@ Agents must never receive database write access or provider-admin credentials.
 
 - `modal_micro_usd`: integer millionths of USD; total 2,000,000,000 ($2,000),
   normal work 1,800,000,000 ($1,800), shutdown work 200,000,000 ($200).
-- `litellm_tokens`: cumulative prompt plus completion tokens, maximum
-  1,000,000,000. Cached input counts once; no LiteLLM dollar gate.
+- LiteLLM has no campaign token budget or reservations. Existing LiteLLM telemetry
+  is monitored by the user; historical token records remain auditable.
 - Outstanding holds and settled actual usage both consume allowance.
 - Initialization cannot reset an existing campaign or change its limits.
 - Reservation IDs are immutable idempotency keys. A repeated reservation returns
   its existing state; **it is not permission to dispatch a second provider job**.
-- Expiration does not refund money or tokens. Any expired unresolved hold blocks
+- Expiration does not refund Modal money. Any expired unresolved hold blocks
   new admission until reconciled. Provider cancellation alone is not reconciliation.
 - Settlement requires a unique receipt reference, including zero-cost cancellation.
   The controller must authenticate and validate receipts; the ledger cannot prove
@@ -33,7 +33,8 @@ Agents must never receive database write access or provider-admin credentials.
 - Missing usage stays reserved. Actual usage above the reservation is still recorded
   and freezes new admission, rather than silently discarding an overrun.
 - Freeze does not prevent reconciliation. There is intentionally no reset/unfreeze
-  API. Reserve bounded cleanup capacity before starting work: fresh admission can
+  API for Modal incidents. The explicit token-policy migration only retires legacy
+  token holds and clears their token-only freeze. Reserve bounded cleanup capacity before starting work: fresh admission can
   be denied during an incident, and already-incurred charges must still be tracked.
 
 The database audit events and receipts are controller-owned, not a tamper-proof
@@ -73,56 +74,41 @@ production campaign ledger.
 ## Research relay
 
 `fps_bench/research_gateway.py` exposes authenticated `/v1/models` and
-`/v1/chat/completions` on loopback port 8765. Each request receives a fresh durable
-reservation and dispatch ID before the relay contacts LiteLLM. The relay refuses
-redirects, alternate upstreams, unknown model aliases, image inputs, multiple
-completions and researcher-supplied metadata. It caps request/response bytes,
-output tokens and socket waits. SSE is buffered until its final usage and DONE
-marker are observed, then returned unchanged to the Pi client.
+`/v1/chat/completions` on loopback port 8765. Requests receive durable dispatch
+IDs but no token reservations. Usage records are optional observations, not a
+condition for forwarding responses. The user monitors existing LiteLLM telemetry.
+Transport failures return errors without creating holds or freezing admission.
+The relay still respects campaign stops/deadlines and unrelated budget freezes.
+It rejects alternate upstreams, unapproved models, researcher metadata and
+oversized requests, and retains request/output/time limits.
 
-The relay requires three distinct credentials: the local Pi bearer, a dedicated
-`gameworld-autoresearch-*` LiteLLM virtual key, and the LiteLLM admin key. It joins
-the response `x-litellm-call-id` to authenticated `/spend/logs/v2` rows filtered by
-the dedicated key alias, verifies final response usage, and settles the reservation
-atomically before replying. The configured two provider retries are included in a
-3,342,336-token reservation. The 1 MiB text request limit accommodates the actual
-allowlisted driver sources; each attempt reserves the full byte limit plus
-65,536 tokens for output and framing rather than assuming four bytes per token.
-Logged failed-attempt usage is used when present; otherwise each hidden retry
-retains the full 1,114,112-token attempt allocation.
+The relay needs only `GAMEWORLD_RESEARCH_TOKEN` and `LITELLM_RESEARCH_KEY`.
+It no longer needs `LITELLM_MASTER_KEY` or authenticated spend-log access.
+Researchers still receive only the local bearer credential. Legacy spend-log
+verification helpers remain for historical audit, not live token enforcement.
 
-Timeout, incomplete stream, missing/duplicate/cross-key spend rows, inconsistent
-usage or excessive retries freeze further admission and keep the reservation held.
-Client errors and audit events omit upstream exception strings, secrets and prompts.
-This conservative retry accounting can overcount but cannot silently refund an
-unobserved attempt.
-
-Create or verify the dedicated key outside the repository:
+Existing ledgers require the explicit user-authorized migration:
 
 ```bash
-PYTHONPATH=. python3 scripts/litellm_research_key.py create \
-  --output /durable/secrets/gameworld-litellm.json \
-  --alias gameworld-autoresearch-YYYYMMDD
+python -m scripts.remove_token_budget --database /durable/campaign.sqlite \
+  --output /durable/token-policy-removal --authorize-removal
 ```
 
-The Pi profile reads `$GAMEWORLD_RESEARCH_TOKEN` and uses the loopback relay.
-The launcher strips all LiteLLM credentials. The trusted relay separately receives
-`LITELLM_RESEARCH_KEY`, `LITELLM_RESEARCH_KEY_ALIAS` and `LITELLM_MASTER_KEY`.
-Do not grant researcher containers access to upstream credential files or the
-ledger. This loopback service is not yet a remotely deployed authentication or
-network-isolation boundary.
+The migration writes a SQLite backup and before/after receipts, retires token
+holds without fabricating measured usage, and preserves all Modal limits,
+reservations, billing groups and prior usage. Retired amounts are reported
+separately from currently reserved tokens. Only a matching token-uncertainty
+freeze can be cleared; a Modal freeze is preserved. Protocol forks carry the
+removed-token-policy marker forward. New GameWorld coordinators disable token
+budgeting during initialization; legacy generic ledger limits are audit-only
+for those campaigns and cannot accept new token reservations.
 
 Offline checks (no inference spend):
 
 ```bash
-python3 -m unittest discover -s scripts -p research_gateway_check.py -v
+python -m unittest scripts.campaign_ledger_check scripts.research_gateway_check
 node --test tools/pi/research.test.mjs tools/pi/browser-research.test.mjs
 ```
-
-The gateway suite drives real local HTTP requests and the installed Pi SDK against
-a fake upstream, including admission refusal before dispatch, paginated spend-log
-matching, retry bounds, exact settlement and failure retention. Live dedicated-key
-evidence remains required for the deployed gateway.
 
 The controller now shares atomic admission/settlement transactions with this
 ledger; see `docs/CAMPAIGN_CONTROLLER.md`. Research proposals declare bounds, while

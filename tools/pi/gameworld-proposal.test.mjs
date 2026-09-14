@@ -32,7 +32,6 @@ const common = {
   hypothesis: 'A smaller Linux input change improves delivery.',
   evidence: [{ task_id: '01_game--01_01', signal: 'low_progress' }],
   references: [{ url: sources[0].url, note: 'Primary evidence with a transfer limitation.' }],
-  litellm_tokens: 1000,
   timeout_seconds: 600,
 };
 

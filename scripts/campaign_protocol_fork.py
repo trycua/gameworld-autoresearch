@@ -17,7 +17,7 @@ ACCOUNTING_TABLES = {
     "campaign", "events", "limits", "modal_prior_scope", "modal_reconciliation_groups",
     "modal_reconciliation_members", "modal_reconciliation_observations",
     "modal_reconciliation_rows", "prior_usage", "reservations", "sqlite_sequence",
-    "training_image_imports",
+    "training_image_imports", "token_budget_removal",
 }
 PROTOCOL_TABLES = {
     "candidates", "controller", "decisions", "jobs", "private_split_leases", "promotions",

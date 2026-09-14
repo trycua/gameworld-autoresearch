@@ -110,7 +110,7 @@ class SupervisorTests(unittest.TestCase):
                 "evaluation_tasks": list(self.supervisor.context["splits"]["development"]),
             },
             "budget": {"modal_micro_usd": 0, "modal_training_micro_usd": 0,
-                       "modal_serving_micro_usd": 0, "litellm_tokens": 1000,
+                       "modal_serving_micro_usd": 0,
                        "desktop_episodes": 68, "timeout_seconds": 600},
         }
 
@@ -131,7 +131,7 @@ class SupervisorTests(unittest.TestCase):
             "budget": {"modal_micro_usd": 20_000_000,
                        "modal_training_micro_usd": 5_000_000,
                        "modal_serving_micro_usd": 15_000_000,
-                       "litellm_tokens": 1000, "desktop_episodes": 68,
+                       "desktop_episodes": 68,
                        "timeout_seconds": 600},
         }
 

@@ -5,10 +5,11 @@ user's global pi agent profile. It does not launch Modal jobs or a research camp
 
 ## Setup and launch
 
-The profile now targets the controller-local metered relay at
-`http://127.0.0.1:8765/v1`, not LiteLLM directly. The relay requires authenticated
-LiteLLM spend-log reconciliation and refuses startup without a dedicated virtual
-key, its alias and a separate admin credential. See `docs/CAMPAIGN_ACCOUNTING.md`.
+The profile targets the controller-local authenticated relay at
+`http://127.0.0.1:8765/v1`, not LiteLLM directly. The relay requires a dedicated
+upstream virtual key and a distinct local client credential, not an admin key.
+Usage is monitored through existing LiteLLM telemetry; there is no token budget
+or reservation. See `docs/CAMPAIGN_ACCOUNTING.md`.
 The commands below require a separately started relay and its client credential.
 
 ```bash
@@ -102,25 +103,16 @@ packages; an integration test verifies command registration and context loading.
 
 `configs/pi/research-limits.json` records the approved limits:
 
-- **LiteLLM: 1,000,000,000 total campaign tokens**, prompt plus completion, including
-  cached prompt tokens once and retries. No periodic reset or per-worker allowance.
+- **LiteLLM: no token or dollar budget.** The user monitors existing LiteLLM telemetry.
 - **Modal: USD 2,000**, with USD 1,800 for normal admission and USD 200 reserved for
   shutdown/delayed charges, focused on training and inference plus associated costs.
 
-The local gateway reserves every admitted request against the canonical
-1-billion-token campaign ledger and freezes the campaign when final usage is
-ambiguous. Pi's per-workflow token budget still does not include every parent
-session or other workflow, so it is not the campaign gate. Successful requests
-settle only after the response usage matches the authenticated LiteLLM spend row.
-Provider-reported hidden retries retain a conservative full-attempt upper bound
-when no failed-attempt usage row exists.
-Live no-retry evidence is recorded in
-`docs/results/2026-09-14-litellm-reconciliation.md`; a naturally occurring retry
-was not forced.
-LiteLLM reports zero token prices for these aliases; its dollar counter is not the
-Modal cost ledger. Modal training and serving reservations are owned by the
-campaign controller, but no unattended campaign should launch until live provider
-reconciliation and shutdown behavior are verified.
+Neither the relay nor Pi reserves tokens or blocks on missing usage records.
+Request-size, output-size, time, model-allowlist and concurrency controls remain.
+Transport failures remain visible errors but do not freeze the campaign budget.
+Historical token receipts remain audit evidence, not active budget requirements.
+Modal training/serving reservations, provider reconciliation and shutdown checks
+remain enforced before an unattended campaign launch.
 
 ## Campaign integration
 
