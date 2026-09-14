@@ -113,7 +113,7 @@ def train_and_reload(base, fresh_base, batches, output, *, base_model, base_revi
             raise ValueError("No nonzero adapter gradient")
         norm = torch.nn.utils.clip_grad_norm_(trainable.values(), 1.0, error_if_nonfinite=True)
         optimizer.step()
-        row = {"step": step + 1, "loss": float(loss.detach()), "gradient_norm": float(norm),
+        row = {"timestamp_ns": time.time_ns(), "step": step + 1, "loss": float(loss.detach()), "gradient_norm": float(norm),
                "supervised_tokens": int((batch["labels"] != -100).sum())}
         losses.append(row)
         with (output / "loss.jsonl").open("ab") as handle:
@@ -122,7 +122,7 @@ def train_and_reload(base, fresh_base, batches, output, *, base_model, base_revi
             try:
                 telemetry.record(f"lora:{experiment}:{step + 1}", "gameworld-train",
                                  {"experiment": experiment, "phase": "train", "split": "train", "objective": "compatibility"},
-                                 {"gameworld_train_loss": row["loss"], "gameworld_train_step": step + 1}, step=step + 1)
+                                 {"gameworld_train_loss": row["loss"], "gameworld_train_step": step + 1}, step=step + 1, timestamp_ns=row["timestamp_ns"])
             except Exception as error:
                 telemetry_errors.append({"step": step + 1, "error_type": type(error).__name__})
     changed = [name for name, parameter in trainable.items() if not torch.equal(initial[name], parameter.detach().cpu())]

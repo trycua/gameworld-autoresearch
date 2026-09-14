@@ -29,6 +29,25 @@ class TelemetryTests(unittest.TestCase):
         return self.telemetry.record(event, "gameworld-train", {"experiment": "smoke", "phase": "train"},
                                      {"gameworld_train_loss": loss, "gameworld_train_step": step}, step)
 
+    def test_original_time_survives_replay_and_out_of_order_import(self):
+        attributes = {"experiment": "smoke", "phase": "train"}
+        self.telemetry.record("new", "gameworld-train", attributes,
+                              {"gameworld_train_loss": 1.0}, timestamp_ns=2000)
+        self.telemetry.record("old", "gameworld-train", attributes,
+                              {"gameworld_train_loss": 2.0}, timestamp_ns=1000)
+        self.assertFalse(self.telemetry.record("old", "gameworld-train", attributes,
+                                             {"gameworld_train_loss": 2.0}, timestamp_ns=1000))
+        with self.assertRaises(ValueError):
+            self.telemetry.record("old", "gameworld-train", attributes,
+                                  {"gameworld_train_loss": 2.0}, timestamp_ns=1001)
+        payload = ExportMetricsServiceRequest.FromString(self.telemetry.export_metrics(self.telemetry.snapshot()))
+        point = payload.resource_metrics[0].scope_metrics[0].metrics[0].gauge.data_points[0]
+        self.assertEqual((point.time_unix_nano, point.as_double), (2000, 1.0))
+        for invalid in (True, 0, -1, 1.5, 2**63):
+            with self.assertRaises(ValueError):
+                self.telemetry.record("invalid", "gameworld-train", attributes,
+                                      {"gameworld_train_loss": 1.0}, timestamp_ns=invalid)
+
     def test_negative_policy_loss_is_preserved(self):
         self.record(loss=-0.25)
         self.assertTrue(self.telemetry.flush()["metrics"])

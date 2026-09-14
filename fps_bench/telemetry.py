@@ -81,7 +81,7 @@ class ResearchTelemetry:
         finally:
             connection.close()
 
-    def record(self, event_id, service, attributes, values, step=None):
+    def record(self, event_id, service, attributes, values, step=None, timestamp_ns=None):
         if not isinstance(event_id, str) or not 1 <= len(event_id) <= 128:
             raise ValueError("Stable event ID required")
         if service not in SERVICES or set(attributes) - ATTRIBUTES or "experiment" not in attributes:
@@ -99,13 +99,15 @@ class ResearchTelemetry:
                 raise ValueError("Evaluation ratios must be in [0,1]")
         if step is not None and (type(step) is not int or step < 0):
             raise ValueError("Optimizer step must be a nonnegative integer")
+        if timestamp_ns is not None and (type(timestamp_ns) is not int or not 0 < timestamp_ns <= time.time_ns()):
+            raise ValueError("Event timestamp must be a positive, nonfuture Unix nanosecond integer")
         payload = json.dumps({"service": service, "attributes": {"campaign": self.campaign, **attributes},
                               "values": values, "step": step}, sort_keys=True, allow_nan=False)
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            existing = connection.execute("SELECT payload FROM events WHERE id=?", (event_id,)).fetchone()
+            existing = connection.execute("SELECT payload,timestamp FROM events WHERE id=?", (event_id,)).fetchone()
             if existing:
-                if existing[0] != payload:
+                if existing[0] != payload or (timestamp_ns is not None and existing[1] != timestamp_ns):
                     raise ValueError("Event ID reused with different telemetry")
                 return False
             experiments = {row[0] for row in connection.execute("SELECT id FROM experiments")}
@@ -118,7 +120,7 @@ class ResearchTelemetry:
             connection.execute("INSERT OR IGNORE INTO experiments VALUES (?)", (attributes["experiment"],))
             connection.executemany("INSERT OR IGNORE INTO series VALUES (?)", [(key,) for key in new_series])
             connection.execute("INSERT INTO events(id,timestamp,payload) VALUES (?,?,?)",
-                               (event_id, time.time_ns(), payload))
+                               (event_id, time.time_ns() if timestamp_ns is None else timestamp_ns, payload))
         return True
 
     def snapshot(self):
@@ -134,7 +136,8 @@ class ResearchTelemetry:
         for event in events:
             for name, value in event["values"].items():
                 key = (event["service"], json.dumps(event["attributes"], sort_keys=True), name)
-                latest[key] = (event, value)
+                if key not in latest or event["timestamp"] >= latest[key][0]["timestamp"]:
+                    latest[key] = (event, value)
         for (_, _, name), (event, value) in latest.items():
             resource = result.resource_metrics.add()
             text_attributes(resource.resource.attributes, {"service.name": event["service"]})

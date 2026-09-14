@@ -117,3 +117,30 @@ The controller adapter also supports `gameworld_litellm_reserved_tokens`,
 `gameworld_desktop_slots_reserved` and `gameworld_training_slots_reserved` as
 unitless gauges. These distinguish held admission capacity from known active
 provider resources. They are locally tested but not yet live-smoke verified.
+
+## Offline training artifact import
+
+`fps_bench.training_telemetry.import_training_losses(artifacts, job_id, telemetry)`
+imports completed training losses into the controller-owned outbox. It first
+calls `TrainingArtifacts.reconcile_export`, which verifies the durable export
+receipt, bundle hashes and adapter identity. It never opens the exported worker
+SQLite database; that file remains immutable evidence only.
+
+The importer requires the controller campaign identity, cross-checks every loss
+row against the hashed completed result, and validates all rows before recording
+anything. Labels are reconstructed from the controller job, not supplied by the
+worker. Only loss and optimizer-step metrics are admitted. Stable event IDs make
+retries idempotent, including after sandbox termination. A subsequent trusted
+`telemetry.flush()` performs export; importing never sends network traffic.
+
+Optimizer rows now contain `timestamp_ns`. The outbox preserves that original
+time through replay and rejects event-ID reuse with a changed timestamp. Gauge
+export selects the newest measurement by event time rather than import order.
+Older artifacts lacking original timestamps are rejected rather than assigned
+fabricated optimizer times. Rebuild the training image before using this path.
+
+Offline checks: `scripts/training_telemetry_check.py` exercises six importer
+cases; `scripts/modal_artifacts_check.py` includes verified export/import after
+termination using synthetic provider/checkpoint fixtures. These do not establish
+GPU-worker telemetry or a live end-to-end campaign result. Public image source
+trust, real GPU staging/training/export and query-side observation remain gates.
