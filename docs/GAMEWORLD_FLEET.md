@@ -3,9 +3,15 @@
 The full game environment is `image/Dockerfile.gameworld`, published by
 `.github/workflows/gameworld-image.yml` as `ghcr.io/trycua/gameworld-autoresearch:gameworld`.
 Use the workflow's `gameworld-fleet-image-<commit>` artifact to provision by digest.
-Provision the digest with `scripts/qwen_fleet.py provision --runtime gvisor
---name-prefix qwen-gameworld --image "$IMAGE" --state results/runs/fleet-gameworld`.
-This retains the minimum 0 / maximum 20 pool configuration.
+
+Production campaign capacity is the Terraform-managed `gameworld-autoresearch`
+pool in `infra/fleet/main.tf`. Campaign code claims from that stable pool and
+must not create, reconcile, resize, or delete the pool through the SDK.
+Update the pinned digest in that Terraform resource, review the plan against the
+private state path documented in `infra/fleet/README.md`, and apply it there.
+The public GHCR image requires `image_pull_secret = ""` and a provider release
+containing the anonymous-pull serialization fix; registry version `0.2.0` does
+not contain that fix.
 The earlier `Dockerfile.qwen` and its `main` tag remain the L-platform pilot.
 
 The GameWorld image contains the upstream runtime/catalog and all 34 game
