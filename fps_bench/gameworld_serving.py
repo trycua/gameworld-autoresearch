@@ -149,10 +149,17 @@ class ModalServingBackend:
                             "--lora-modules", *loras])
         shell = " ".join(__import__("shlex").quote(value) for value in command)
         process = await sandbox.exec.aio(
-            "bash", "-lc", f"nohup {shell} >/output/server.log 2>&1 </dev/null & echo $! >/output/server.pid",
+            "bash", "-lc", f"mkdir -p /output && nohup {shell} >/output/server.log 2>&1 </dev/null & "
+            "echo $! >/output/server.pid",
             timeout=30, env={"VLLM_API_KEY": api_key}, secrets=[])
-        if await process.wait.aio() != 0:
-            raise RuntimeError("Candidate vLLM launch command failed")
+        stdout, stderr, returncode = await asyncio.gather(
+            process.stdout.read.aio(), process.stderr.read.aio(), process.wait.aio())
+        if returncode != 0:
+            detail = stdout + stderr
+            if isinstance(detail, bytes):
+                detail = detail.decode(errors="replace")
+            detail = str(detail)[-2000:]
+            raise RuntimeError("Candidate vLLM launch command failed: " + detail)
         for _ in range(240):
             observed = await self.inspect(sandbox_id)
             if observed["returncode"] is not None:

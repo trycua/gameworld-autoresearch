@@ -260,7 +260,9 @@ class ModalServingCreateTests(unittest.TestCase):
 
 class ModalServerCommandTests(unittest.TestCase):
     def test_dual_lora_server_advertises_parent_and_child(self):
-        process = SimpleNamespace(wait=SimpleNamespace(aio=AsyncMock(return_value=0)))
+        stream = lambda: SimpleNamespace(read=SimpleNamespace(aio=AsyncMock(return_value=b"")))
+        process = SimpleNamespace(stdout=stream(), stderr=stream(),
+                                  wait=SimpleNamespace(aio=AsyncMock(return_value=0)))
         sandbox = SimpleNamespace(exec=SimpleNamespace(aio=AsyncMock(return_value=process)))
         modal = SimpleNamespace(Sandbox=SimpleNamespace(
             from_id=SimpleNamespace(aio=AsyncMock(return_value=sandbox))))
@@ -276,6 +278,7 @@ class ModalServerCommandTests(unittest.TestCase):
                 "fps_bench.gameworld_serving.authenticated_request", return_value=models):
             asyncio.run(backend.start_server("sb-test", plan, "x" * 32))
         shell = sandbox.exec.aio.await_args.args[2]
+        self.assertIn("mkdir -p /output", shell)
         self.assertIn("--max-loras 2", shell)
         self.assertIn("model-parent=/input/parent-adapter", shell)
         self.assertIn("model-child=/input/adapter", shell)
