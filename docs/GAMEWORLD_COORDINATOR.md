@@ -31,7 +31,9 @@ and later reconciles that allocation. Source serving has a fixed `$10` hold and
 one-hour maximum, stops before training, and restarts for protected driver
 evaluations. Candidate vLLM advertises both the actual parent policy and child LoRA
 name on one GPU; when the parent is already adapted, both immutable LoRA artifacts
-are staged and the raw base model is not mislabeled as the champion. This avoids unaccounted inference and
+are staged and the raw base model is not mislabeled as the champion. Serving uses
+an empty outbound CIDR allowlist with encrypted port 8000; Modal does not permit
+`block_network=True` together with an open tunnel. This avoids unaccounted inference and
 unreconcilable per-Fleet-job Modal reservations.
 
 The coordinator CLI is a durable, credential-free control-plane interface:
