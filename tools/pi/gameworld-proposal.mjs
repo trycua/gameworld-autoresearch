@@ -74,7 +74,7 @@ export function proposalCoreSchema(context, sources) {
   return object({
     ...common,
     objective: { type: 'string', enum: context.sft_sources.length ? ['sft', 'grpo'] : ['grpo'] },
-    training_tasks: strings(context.splits.train, 1, Math.min(16, context.splits.train.length)),
+    training_tasks: strings(context.splits.train, 1, context.splits.train.length),
     rollouts_per_task: integer(1, context.policy.model.maximum_grpo_group_size),
     max_trajectory_steps: integer(1, context.policy.model.maximum_trajectory_steps),
     optimizer_steps: integer(1, context.policy.model.maximum_optimizer_steps),

@@ -93,3 +93,20 @@ test('SFT scope must exactly match its immutable dataset', () => {
   const proposal = assembleProposal(core, modelContext, sources, '2026-09-14T00:00:00.000Z');
   assert.deepEqual(proposal.experiment.training_tasks, tasks);
 });
+
+test('proposal schema can represent an entire 18-task SFT source', () => {
+  const tasks = Array.from({ length: 18 }, (_, index) => `train-task-${index}`);
+  const modelContext = { ...context, recommended_track: 'model',
+    splits: { ...context.splits, train: [...tasks, 'another-train-task'] },
+    sft_sources: [{ id: 'approved-source', tasks }] };
+  const schema = proposalCoreSchema(modelContext, sources);
+  const training = schema.properties.training_tasks;
+  assert.equal(training.maxItems, modelContext.splits.train.length);
+  assert.ok(tasks.length <= training.maxItems);
+  assert.deepEqual(training.items.enum, modelContext.splits.train);
+  const proposal = assembleProposal({ ...common, objective: 'sft', training_tasks: tasks,
+    rollouts_per_task: 1, max_trajectory_steps: 4, optimizer_steps: 2,
+    sft_source_id: 'approved-source', modal_training_micro_usd: 8000000,
+    modal_serving_micro_usd: 10000000 }, modelContext, sources, '2026-09-14T00:00:00.000Z');
+  assert.deepEqual(proposal.experiment.training_tasks, tasks);
+});

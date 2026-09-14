@@ -259,3 +259,22 @@ intact. The gateway diagnostics change supersedes the latest source contract;
 retain its evidence and resolve the authenticated usage obligation before
 freezing another protocol or admitting research. Do not reset/fork away the
 freeze, discard the token hold, or repeat the completed SFT smoke test.
+
+## Source-selection consistency and continuing recovery
+
+The Pi model-proposal schema still capped `training_tasks` at 16 even though
+the authenticated SFT source contains 18 tasks and assembly correctly requires
+the entire immutable dataset. The schema now uses the frozen train split's
+size as its upper bound; its enum still excludes development and private tasks.
+A regression test constructs and assembles an 18-task source successfully.
+All six JavaScript proposal tests pass. This removes a real blocker to Pi
+selecting the GPU-verified SFT source; it does not change game controls or data.
+
+A second authenticated spend-log query at approximately 19:16 UTC still
+returned no rows for the unresolved planning request. Its dispatch and freeze
+events have the same second timestamp, so a transport timeout must not be
+asserted as the cause. An intentionally invalid, model-less POST returned the
+expected validation HTTP 400 without inference, confirming the API path is
+reachable now but not explaining the original error. The campaign remains
+frozen, its token hold is unchanged, and the 20:00 UTC Modal reconciliation
+process remains scheduled.
