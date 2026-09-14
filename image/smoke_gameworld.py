@@ -6,12 +6,48 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
+from urllib import request
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fps_bench.gameworld_baseline import game_environment
+from fps_bench.gameworld_fleet import FleetSandboxBackend
 from fps_bench.gameworld_suite_catalog import GAMEWORLD_REVISION, GAMES_REVISION
 from fps_bench.gameworld_suite_episode import DRIVER
 from fps_bench.qwen_baseline import ROOT
+
+
+class LocalComputerShell:
+    async def run(self, command, timeout):
+        def send():
+            body = json.dumps({"command": "run_command", "params": {
+                "command": command, "timeout": timeout}}).encode()
+            outgoing = request.Request("http://127.0.0.1:8000/cmd", data=body,
+                                       headers={"Content-Type": "application/json"})
+            with request.urlopen(outgoing, timeout=timeout + 5) as response:
+                text = response.read().decode()
+            for line in text.splitlines():
+                if not line.startswith("data: "):
+                    continue
+                payload = json.loads(line[6:])
+                if not payload.get("success", True):
+                    raise RuntimeError(f"Computer shell failed: {payload}")
+                result = payload.get("result", payload)
+                returncode = result.get("returncode", result.get("return_code", -1))
+                return SimpleNamespace(success=returncode == 0, returncode=returncode)
+            raise RuntimeError("Computer shell returned no result frame")
+
+        return await asyncio.to_thread(send)
+
+
+async def check_worker_transport():
+    with tempfile.TemporaryDirectory(prefix="gameworld-transport-smoke-") as directory:
+        sandbox = SimpleNamespace(shell=LocalComputerShell())
+        await FleetSandboxBackend().run(sandbox, directory, "sleep 20; echo transport-ready; exit 7", 30)
+        output = Path(directory) / "output"
+        assert json.loads((output / "provider-result.json").read_text()) == {"returncode": 7}
+        assert (output / "worker.log").read_text().strip() == "transport-ready"
+        print(json.dumps({"worker_transport": "ready", "detached_seconds": 20}))
 
 
 async def main():
@@ -24,6 +60,7 @@ async def main():
     assert provenance["artifacts"] == {str(driver_path): driver_sha256}
     assert provenance["upstream"] == {
         "gameworld_revision": GAMEWORLD_REVISION, "games_revision": GAMES_REVISION}
+    await check_worker_transport()
     with tempfile.TemporaryDirectory(prefix="gameworld-smoke-") as directory:
         async with game_environment(config, Path(directory), "/usr/local/bin/cua-driver") as (page, call, target):
             await page.evaluate("""() => {
