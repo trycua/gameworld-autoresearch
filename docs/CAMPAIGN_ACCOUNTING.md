@@ -152,6 +152,22 @@ reserved bounds for unreported usage, storage/idle allowances and a watchdog.
 
 Validation: `python3 -m scripts.modal_billing_check`.
 
+## Protocol-boundary fork
+
+`scripts/campaign_protocol_fork.py` creates a fresh campaign database when a
+new frozen controller contract replaces an initialized protocol. It refuses any
+active job, held reservation, unresolved image import, unknown table, existing
+destination or reused campaign ID. The SQLite backup preserves reservations,
+prior usage, reconciliation groups and their receipts exactly, drops only
+controller/worker protocol state, appends a fork event and emits hashes for the
+source accounting snapshot and destination database. This is not a refund or a
+prior-usage reclassification; the full existing commitment carries forward.
+
+The September 14 v2 fork preserves `$206.013141` from
+`gameworld-joint-20260913` in `gameworld-joint-20260914-v2`. Its private receipt
+is `/home/node/.local/state/gameworld-autoresearch/campaigns/gameworld-joint-20260913/campaign-v2-fork.json`.
+The source database remains unchanged and is no longer used for new admission.
+
 ## Completed-work conservative reconciliation
 
 `docs/MODAL_RECONCILIATION.md` documents atomic grouped reconciliation that retains
