@@ -27,6 +27,12 @@ The image copies **this repository's** `cua-driver/`, not an upstream replacemen
 to `/opt/gameworld-autoresearch/cua-driver`. Docker builds it natively before
 publishing and installs it as `/usr/local/bin/cua-driver`.
 
+The vendored `compat-fixtures/` directory is copied from the revision recorded in
+`cua-driver/UPSTREAM_REF`. Both Rust compatibility-test targets are compiled during
+image construction, so missing fixtures fail the image build and their debug
+dependencies are cached before a research worker needs them. A new image must not
+replace the digest of an already-frozen campaign.
+
 `image-source.json` uses provenance schema 2. It records every file under each
 runtime source tree actually present in the image, the installed driver binary
 SHA256, and the checked-out GameWorld and GameWorld-Games revisions. Runtime

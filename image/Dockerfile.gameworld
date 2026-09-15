@@ -24,6 +24,8 @@ RUN cd "$CUA_DRIVER_SRC/rust" \
     && cargo build --locked --release -p cua-driver \
     && install -m755 "$CARGO_TARGET_DIR/release/cua-driver" /usr/local/bin/cua-driver \
     && cargo build --offline --locked --release -p cua-driver \
+    && cargo test --offline --locked -p cua-driver-core --test contract_parity --no-run \
+    && cargo test --offline --locked -p cua-driver --test compatibility_contract_test --no-run \
     && cua-driver --version
 COPY fps_bench/ fps_bench/
 COPY configs/ configs/
@@ -32,7 +34,6 @@ COPY scripts/gameworld_driver_contract.py scripts/gameworld_driver_worker.py \
 COPY image/rebuild_driver.sh image/smoke_gameworld.py image/write_provenance.py image/
 COPY .auto/gameworld-prompt.md .auto/measure_gameworld.sh .auto/
 COPY docs/GAMEWORLD_FLEET.md docs/GAMEWORLD_FLEET.md
-COPY README.md README.md
 RUN cd /tmp \
     && /opt/gameworld-venv/bin/python /opt/gameworld-autoresearch/scripts/gameworld_rollout_worker.py --help \
     && /opt/gameworld-venv/bin/python /opt/gameworld-autoresearch/scripts/gameworld_driver_worker.py --help

@@ -383,3 +383,36 @@ Unexpired bills do not block desktop work or GPU work in another app. Unknown
 prior app ownership fails closed. This changes operational dispatch timing only,
 not hypotheses, frozen evaluator inputs, job assignments, or the Modal cap.
 All 29 operational, serving-identity, runner, and billing checks pass.
+
+The updated operator was deployed at a clean driver-job boundary at 06:51 UTC.
+It waited before round six's new serving capacity, then reconciled the previous
+replacement sandbox at 07:00:15 UTC: $3.290011 observed, the complete $13.813600
+allocation retained, and no refund. New capacity started only after that receipt.
+The next model hypothesis is `model-cubefield-steering-transfer`.
+
+## Driver validation packaging failure
+
+Round five generated a nonempty source patch and built a changed driver binary.
+The release rebuild took 34.57 seconds and both Rust contract-parity tests passed.
+Validation then failed to compile `compatibility_contract_test`: vendoring omitted
+`cua-driver/compat-fixtures/cli.json` and `mcp.json`. Job
+`gw-77c04f6286255be23231cc34465a684b` remains failed and cleaned; it is not retried
+or treated as evidence for or against the driver hypothesis.
+
+The complete upstream fixture directory is restored byte-for-byte from
+`dbf0d3a450d9c4fc3a0a768faf0ce9b3283f908e`, the existing `UPSTREAM_REF`. The local
+compatibility-test source also matches that upstream revision exactly. Future
+images compile both required Rust test targets at build time to detect missing
+inputs and retain the debug build cache. The obsolete root README COPY was removed
+to respect the upstream README deletion already merged into this repo.
+
+Inspection also found that the desktop contract launcher assigned a local variable
+named `socket`, shadowing the imported module before `socket.socket()` could run.
+Renaming it to `socket_path` fixes startup without changing any contract checks.
+A regression test exercises setup through HTTP-server launch. All 30 selected
+tests, static image validation, and frozen-source verification pass.
+
+These packaging fixes are for future images; the active campaign's frozen image
+digest has not been changed. An authenticated, narrowly scoped support-file repair
+for future driver build claims still needs validation before deployment into this
+campaign. No old result has been rewritten or retried.

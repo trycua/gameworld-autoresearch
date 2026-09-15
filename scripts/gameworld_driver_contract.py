@@ -41,16 +41,16 @@ async def run(output, driver):
         server = subprocess.Popen([
             "python3", "-m", "http.server", str(port), "--bind", "127.0.0.1", "--directory", str(root),
         ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        socket = str(root / "driver.sock")
+        socket_path = str(root / "driver.sock")
         daemon = subprocess.Popen([
-            driver, "serve", "--socket", socket, "--dangerously-bypass-approvals", "--no-permissions-gate",
+            driver, "serve", "--socket", socket_path, "--dangerously-bypass-approvals", "--no-permissions-gate",
         ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         try:
             for _ in range(100):
                 if daemon.poll() is not None:
                     raise RuntimeError("Candidate driver daemon exited")
                 try:
-                    await driver_command(driver, socket, "status")
+                    await driver_command(driver, socket_path, "status")
                     break
                 except (RuntimeError, ValueError):
                     await asyncio.sleep(0.1)
@@ -71,7 +71,7 @@ async def run(output, driver):
             session = "contract-" + uuid.uuid4().hex
 
             async def call(tool, arguments):
-                return await driver_command(driver, socket, "call", tool,
+                return await driver_command(driver, socket_path, "call", tool,
                                             json.dumps({**arguments, "session": session}))
 
             async with async_playwright() as playwright:

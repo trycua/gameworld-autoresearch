@@ -20,7 +20,7 @@ COPIED = {
     "scripts/gameworld_rollout_worker.py", "image/rebuild_driver.sh",
     "image/smoke_gameworld.py", "image/write_provenance.py",
     ".auto/gameworld-prompt.md", ".auto/measure_gameworld.sh",
-    "docs/GAMEWORLD_FLEET.md", "README.md",
+    "docs/GAMEWORLD_FLEET.md",
 }
 TRIGGERS = {
     ".github/workflows/gameworld-image.yml", ".dockerignore", "image/**",
@@ -88,6 +88,14 @@ def main():
     assert "RUN cd /tmp" in dockerfile
     for worker in ("rollout", "driver"):
         assert f"/opt/gameworld-autoresearch/scripts/gameworld_{worker}_worker.py --help" in dockerfile
+    for package, target in (("cua-driver-core", "contract_parity"),
+                            ("cua-driver", "compatibility_contract_test")):
+        assert f"cargo test --offline --locked -p {package} --test {target} --no-run" in dockerfile
+    for name, expected in {
+        "cli.json": "00d16fae4f44ebdbe1331b7b572764c069f0373090ab110b80536a690b52e194",
+        "mcp.json": "5579eb51178f08c69fbb6b28a63a59f253a600858505ea80f5df94c105c387cb",
+    }.items():
+        assert sha256(ROOT / "cua-driver/compat-fixtures" / name) == expected
     check_manifest()
     print("Validated GameWorld COPY inputs, rebuild triggers, and schema-v2 runtime provenance")
 
