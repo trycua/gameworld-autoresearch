@@ -63,4 +63,61 @@ an unexported checkpoint, or weaken artifact verification. The conditional final
 check reloads the exported adapter and evaluates one frozen development Breakout
 task. No candidate promotion or improvement claim is permitted.
 
-At this checkpoint the one-step retry and adapted-policy evaluation are pending.
+## Final result: bounded pipeline passed
+
+Completed on **September 15, 2026**. The one-step training-to-evaluation path
+passed; this does not turn the earlier two-step attempt into a success.
+
+- Training job: `grpo-one-step-v9`, one actual GRPO optimizer step.
+- Updated parameter tensors: 56; all adapter updates finite.
+- Exported adapter SHA-256:
+  `32d29f5b953e3fb4de44c6d039219162ea13c9e77165322d609561baa474e412`.
+- Reload maximum completion-log-probability error: `0.0`.
+- Gradient norm: `0.6372823119163513`; initial-step loss:
+  `-7.916241884231567e-09`. No loss-decrease or policy-improvement claim.
+- The exported adapter loaded into vLLM as `grpo-adapter-v9`.
+- Development task: `05_breakout--05_03`, 60 actions, 0 invalid actions,
+  0 driver errors, approximately 203 seconds.
+- GameWorld task outcome: **not successful**, reported progress approximately
+  `0.05`. Pipeline success is not benchmark task success.
+- Independent replay of every step and the final GameWorld evaluator result
+  matched the recorded evaluation exactly. The evaluator file hash matches
+  upstream revision `3c26bdab436800fd61ef40543b64ca40d12c7e4a`.
+
+No driver code was changed in this test, no candidate was promoted, and no full
+34-game / 170-task campaign was launched.
+
+## Cleanup, telemetry, and remaining billing
+
+The rollout claims and evaluation claim are confirmed absent. Both dedicated
+Modal apps have no running sandboxes. The adapter-serving sandbox was terminated
+at `2026-09-15T00:30:56.077398+00:00`; the training sandbox had already stopped
+before serving began.
+
+Verified exported loss scalars were imported into the trusted controller's OTel
+outbox, rather than trusting the worker's SQLite database. OTel acknowledged
+training, evaluation and accounting logs/metrics: no export errors and no pending
+logs. The development task failure is recorded as a failure, not a success.
+
+At midnight, prior source serving plus the unsuccessful two-step attempt
+reconciled at $1.569236 observed, retaining the full $20 allocation. Conservative
+total campaign commitment is now **$411.013141 / $2,000**; this is not an assertion
+that $411.013141 was actually billed. The newest $25 allocation (one-step training
+and adapted serving) remains held until the next closed billing window.
+
+Its authenticated reconciliation is scheduled for **September 15, 2026,
+01:00:05 UTC**. Process custody: `coordinator-v9/billing-0100-process.json`;
+expected receipts: `billing-0100-result.json` and `billing-0100-telemetry.json`.
+No compute remains running while billing closes. Until settlement, the expired
+training hold can block further provider admission; it is not bypassed.
+
+Primary evidence under `vertical-slices/grpo-authenticated-v9`:
+
+- `dataset-receipt.json`, `dataset-verification.json`
+- `training-one-step-result.json`, `one-step-worker-receipt.json`
+- `adapter-serving-ready.json`, `adapter-evaluation.json`
+- `evaluator-replay.json`, `e2e-result.json`, `e2e-telemetry-export.json`
+
+The authenticated model export, adapter files and loss log are in
+`coordinator-v9/modal/grpo-one-step-v9`; provider cleanup receipts are retained
+alongside their original launch journals.
