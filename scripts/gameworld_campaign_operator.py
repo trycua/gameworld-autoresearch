@@ -13,7 +13,8 @@ from fps_bench.evaluation_contract import canonical, digest
 from fps_bench.gameworld_billing import ACTIVE_STATES, GameWorldModalReconciler, hour
 from fps_bench.gameworld_research_worker import GameWorldResearchWorker
 from fps_bench.gameworld_runner import GameWorldProviderRunner, MODAL_FIELDS
-from scripts.gameworld_capacity_operations import CapacityCoordinator, replace_expired_serving
+from scripts.gameworld_capacity_operations import CapacityCoordinator, pause_expiring_serving, replace_expired_serving
+from scripts.gameworld_driver_support import DriverSupportBackend
 
 
 class AppScopedReconciler(GameWorldModalReconciler):
@@ -89,6 +90,15 @@ class CampaignOperator:
             waits = {row['id'] for row in connection.execute(
                 "SELECT id FROM reservations WHERE state='held' AND expires_at<=? ORDER BY id",
                 (int(time.time()) + 30,))}
+            for job in connection.execute(
+                    "SELECT j.id FROM gameworld_workflows w JOIN jobs j "
+                    "ON j.id=json_extract(w.details,'$.serving_job') "
+                    "WHERE w.state='evaluating' AND w.track='model' AND j.state='billing_pending' "
+                    "AND EXISTS (SELECT 1 FROM gameworld_work_items i WHERE i.workflow=w.proposal_id "
+                    "AND i.kind='evaluation' AND i.state='pending')"):
+                waits.update(row['id'] for row in connection.execute(
+                    "SELECT id FROM reservations WHERE id=? AND state='held'",
+                    (f"job:{job['id']}:modal_micro_usd",)))
             upcoming = {row['kind'] for row in connection.execute(
                 "SELECT kind FROM gameworld_work_items WHERE state IN ('pending','admitted') "
                 "AND kind IN ('training','serving')")}
@@ -116,6 +126,9 @@ class CampaignOperator:
         if self.runner.admission_blocked():
             result = await self.runner.run_once()
             return {'status': 'stopped', 'result': result}
+        paused = await pause_expiring_serving(self.runner)
+        if paused is not None:
+            return {'status': 'progress', 'capacity_pause': paused}
         waits = self.billing_waits()
         if waits:
             transitions = self.coordinator.advance()
@@ -172,6 +185,7 @@ def main():
         {'QWEN_API_KEY': os.environ.get('QWEN_API_KEY', '')},
         candidate_api_key=os.environ.get('QWEN_CANDIDATE_API_KEY'),
         research_worker=research, billing_reconciler=billing)
+    runner.fleet.backend = DriverSupportBackend(coordinator.controller)
     operator = CampaignOperator(runner)
 
     async def run():

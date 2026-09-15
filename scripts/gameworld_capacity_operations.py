@@ -10,8 +10,8 @@ from fps_bench.gameworld_serving import GameWorldServingLifecycle, compute_reser
 
 
 def extend_deadline(controller, authorization, total_seconds=43200):
-    if not authorization.strip() or type(total_seconds) is not int or not 21600 < total_seconds <= 43200:
-        raise ValueError('An explicit authorization and at most twelve total hours are required')
+    if not authorization.strip() or type(total_seconds) is not int or not 21600 < total_seconds <= 64800:
+        raise ValueError('An explicit authorization and at most eighteen total hours are required')
     with controller.ledger.transaction() as connection:
         current = dict(controller._controller(connection, admission=True))
         deadline = current['created'] + total_seconds
@@ -90,6 +90,37 @@ class ReplacementController:
                 'job_id': self.job_id, 'candidate_id': candidate['id'],
                 'policy_sha256': candidate['policy_sha256'], 'deployment': candidate['deployment']})
         return existing
+
+
+async def pause_expiring_serving(runner):
+    controller, coordinator = runner.controller, runner.coordinator
+    with controller.ledger.transaction() as connection:
+        if not connection.execute("SELECT 1 FROM sqlite_master WHERE name='gameworld_operational_extensions'").fetchone():
+            return None
+        if not connection.execute('SELECT 1 FROM gameworld_operational_extensions').fetchone():
+            return None
+        if connection.execute("SELECT 1 FROM jobs WHERE kind IN ('evaluation','rollout') "
+                              "AND state IN ('reserved','dispatching','running','cleanup_pending')").fetchone():
+            return None
+        workflows = [coordinator._workflow(connection, row[0]) for row in connection.execute(
+            "SELECT proposal_id FROM gameworld_workflows WHERE state='evaluating' AND track='model'")]
+        due = []
+        for workflow in workflows:
+            job = controller._job(connection, workflow['details']['serving_job'])
+            timeout = connection.execute(
+                "SELECT MAX(timeout_seconds) FROM gameworld_work_items WHERE workflow=? "
+                "AND kind='evaluation' AND state='pending'", (workflow['proposal_id'],)).fetchone()[0]
+            if (timeout is not None and job['state'] == 'cleanup_pending' and job['result'] is not None
+                    and time.time() + timeout + 60 >= job['deadline']):
+                due.append({'workflow': workflow['proposal_id'], 'job_id': job['id'],
+                            'serving_deadline': job['deadline'], 'next_episode_timeout': timeout,
+                            'reason': 'replace-between-episodes-before-serving-expiry'})
+    for receipt in due:
+        await runner.cleanup_serving_job(receipt['job_id'])
+        with controller.ledger.transaction() as connection:
+            controller.ledger._event(connection, 'serving_capacity_paused', receipt)
+        return receipt
+    return None
 
 
 async def replace_expired_serving(runner):

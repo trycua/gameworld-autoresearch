@@ -3,12 +3,14 @@
 import asyncio
 import copy
 import json
+import time
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from fps_bench.campaign_ledger import BudgetRefused, LedgerConflict
 from fps_bench.gameworld_serving import GameWorldServingLifecycle
-from scripts.gameworld_capacity_operations import CapacityCoordinator, extend_deadline, ReplacementController
+from scripts.gameworld_capacity_operations import CapacityCoordinator, extend_deadline, pause_expiring_serving, ReplacementController
 from scripts import gameworld_runner_check, gameworld_serving_check, gameworld_coordinator_check
 
 
@@ -40,9 +42,19 @@ class ExtensionTests(unittest.TestCase):
             extend_deadline(self.controller, 'authorized')
 
     def test_authorization_and_bound_required(self):
-        for authorization, seconds in [('', 43200), ('authorized', 43201), ('authorized', 21600)]:
+        for authorization, seconds in [('', 43200), ('authorized', 64801), ('authorized', 21600)]:
             with self.assertRaises(ValueError):
                 extend_deadline(self.controller, authorization, seconds)
+
+    def test_followup_extension_retains_previous_audit_and_budget(self):
+        first = extend_deadline(self.controller, 'authorized operational continuation')
+        before = self.controller.snapshot()
+        second = extend_deadline(self.controller, 'authorized operational continuation', 64800)
+        self.assertEqual(second['previous_deadline'], first['deadline'])
+        self.assertEqual(second['original_duration'], first['original_duration'])
+        self.assertEqual(self.controller.snapshot()['budget']['resources'], before['budget']['resources'])
+        with self.controller.ledger.transaction() as connection:
+            self.assertEqual(connection.execute('SELECT count(*) FROM gameworld_operational_extensions').fetchone()[0], 2)
 
 
 class ReplacementIdentityTests(unittest.TestCase):
@@ -118,6 +130,45 @@ class CapacityViewTests(unittest.TestCase):
             self.assertEqual(connection.execute('SELECT job_id FROM gameworld_work_items WHERE id=?', (old['id'],)).fetchone()[0], old['job_id'])
         self.assertEqual(coordinator._items(workflow['proposal_id'], 'serving')[0]['state'], 'complete')
         self.assertEqual(len(coordinator._items(workflow['proposal_id'], 'development')), 136)
+
+
+class EpisodeBoundaryTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = gameworld_coordinator_check.CoordinatorTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.fixture.test_grpo_routes_rollout_dataset_training_serving_and_pairing()
+        self.coordinator = self.fixture.coordinator
+        self.controller = self.coordinator.controller
+        self.workflow = self.coordinator.workflow('model-action')
+        self.job = self.workflow['details']['serving_job']
+        self.runner = SimpleNamespace(controller=self.controller, coordinator=self.coordinator,
+                                      cleanup_serving_job=AsyncMock(), modal_config={})
+        extend_deadline(self.controller, 'authorized replacement')
+        with self.controller.ledger.transaction() as connection:
+            connection.execute('UPDATE jobs SET deadline=? WHERE id=?', (int(time.time()) + 600, self.job))
+
+    def test_pauses_at_boundary_then_waits_for_unexpired_bill(self):
+        async def cleanup(job):
+            self.controller.provider_cleanup_confirmed(job, 'boundary-provider-cleanup')
+        self.runner.cleanup_serving_job.side_effect = cleanup
+        result = asyncio.run(pause_expiring_serving(self.runner))
+        self.assertEqual(result['job_id'], self.job)
+        from scripts.gameworld_campaign_operator import CampaignOperator
+        waits = CampaignOperator(self.runner).billing_waits()
+        self.assertIn(f'job:{self.job}:modal_micro_usd', waits)
+        self.assertEqual(len(self.coordinator._items(self.workflow['proposal_id'], 'development')), 136)
+
+    def test_never_interrupts_an_admitted_episode(self):
+        self.coordinator.admit_ready(1)
+        self.assertIsNone(asyncio.run(pause_expiring_serving(self.runner)))
+        self.runner.cleanup_serving_job.assert_not_awaited()
+
+    def test_does_not_pause_with_sufficient_capacity(self):
+        with self.controller.ledger.transaction() as connection:
+            connection.execute('UPDATE jobs SET deadline=? WHERE id=?', (int(time.time()) + 10800, self.job))
+        self.assertIsNone(asyncio.run(pause_expiring_serving(self.runner)))
+        self.runner.cleanup_serving_job.assert_not_awaited()
 
 
 if __name__ == '__main__':

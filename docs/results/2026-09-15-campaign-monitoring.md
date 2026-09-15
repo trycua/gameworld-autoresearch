@@ -416,3 +416,45 @@ These packaging fixes are for future images; the active campaign's frozen image
 digest has not been changed. An authenticated, narrowly scoped support-file repair
 for future driver build claims still needs validation before deployment into this
 campaign. No old result has been rewritten or retried.
+
+## Authenticated support repair and continued training
+
+The build-only repair is implemented in `scripts/gameworld_driver_support.py`.
+It accepts only the recorded upstream revision, unchanged compatibility-test
+source, exact upstream fixture hashes, and the reviewed old/new launcher hashes.
+It rejects unexpected files or symlinks and records every support-file change.
+Only driver-build claims receive it; evaluation staging and collection remain
+unchanged. The existing evaluator, Rust driver source, and installed baseline
+binary are not changed by this support repair.
+
+An independently admitted `warm-driver-probe` job,
+`gw-driver-support-validation-20260915`, tested the repair on the frozen Fleet
+image without applying a candidate patch or running a game episode. Both Rust
+contract targets passed, as did focus, held-keys, key-release, and mouse-delivery
+checks. The baseline driver SHA256 was unchanged before and after. Its artifacts
+and support receipt are under `driver-support-validation/` in campaign state;
+the claim was released and the controller job is cleaned. This does not retry
+or rewrite the failed round-five candidate.
+
+Cubefield GRPO training completed successfully with one optimizer step, 56 updated
+parameter tensors, gradient norm 0.33056405186653137, loss 0.33333333333333337,
+and reload log-probability error zero. Its adapter manifest is
+`b728d4f9cbde435e5e43c26c7cffa9978a4a54ed96c4081b7236d13b94bd9259`.
+The candidate waits for the source-serving closed-hour bill, not further training.
+No benchmark improvement is claimed.
+
+Under the user's standing authorization to extend deadlines and launch replacement
+capacity, a second append-only operational extension sets the effective campaign
+deadline to **September 15 at 17:00:37 UTC** (18 hours total). The 11:00 deadline
+could not accommodate a three-hour serving reservation plus cleanup after the
+08:00 billing close. The earlier extension and original six-hour initialization
+duration remain recorded. Jobs, existing reservations, candidates, private leases,
+the $2,000 cap, and frozen evaluator inputs are unchanged. Receipt:
+`operational-extension-followup-20260915.json`.
+
+The operational wrapper also pauses model development serving only between
+episodes when its remaining lifetime cannot cover the next episode's declared
+timeout plus margin. It reconciles that capacity before an authenticated
+same-policy replacement, retaining all pending assignments. Tests cover avoiding
+interruption of admitted episodes and waiting on the old unexpired hold.
+All 42 selected checks, static image validation, and frozen-source verification pass.
