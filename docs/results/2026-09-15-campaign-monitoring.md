@@ -103,3 +103,44 @@ At the next telemetry check, logs and metrics were acknowledged with zero
 pending logs (`monitor-0108-telemetry.json`). Conservative Modal commitment is
 $431.013141 of $2,000, not an actual-billed-spend claim. The independent
 watchdog remains active. The monitoring goal remains open.
+
+## Round 3 and successful round 4 training
+
+Round 3, `driver-startup-readiness-barrier`, produced a no-op diff after its
+patch researcher found the proposed readiness behavior already implemented.
+The Fleet worker rejected that diff at `git apply --check`; no changed driver
+was built. The error reproduces locally. The Fleet claim was released and the
+loop continued to round 4 without operator changes to the patch or history.
+Evidence: `fleet/gw-8faf0e1a27407bced3c52641ef59a466/error.json` and
+`research/gw-research-e4414b4a3e1c3b35e51f98e952d80e1e/result.json`.
+
+Round 4, `model-breakout-action-lora-grpo`, chose two one-step Breakout train
+rollouts and one optimizer step. Both rollouts completed. Their rewards differ:
+one invalid response has reward -0.07500000000000001; one valid response has
+reward 0.008333333333333331. The operator completed the same existing dataset
+handoff after the runner exited idle, then resumed the unchanged campaign.
+Dataset: `8860457e1e933017ec14289396a156998400cef0a8b485bed3cc67fdb899c9eb`.
+Receipts: `operator-dataset-registration-breakout.json` and
+`resume-breakout-0119-process.json`.
+
+Training job `gw-9297fcda74939acf7bae1c5479e64d7d` completed and exported an
+accepted adapter. Its authenticated `modal/<job>/result.json` reports:
+
+- One optimizer step; two trajectories; zero zero-variance groups.
+- 56 updated parameter tensors and gradient norm 1.8144479990005493.
+- Initial-step loss 0.0; this is not a loss-improvement claim.
+- Reload maximum log-probability error 0.0.
+- Adapter manifest SHA-256:
+  `8bd17928d74ce3b5f0b9d32d69c173d651e8f2680bab96a6c1bb9fb442d1d81d`.
+
+By 01:25 UTC, candidate `model-8cbe4b79d50f8e412fbcd519` was serving and
+the coordinator queued 136 development episodes: two repeats for candidate
+and parent across all 34 games. Two Fleet evaluation jobs were running.
+Training success does not imply successful evaluation or promotion.
+
+Pending operational risk: the old failed-training reservation expires at
+approximately 01:36 UTC while its provider is already terminated. The current
+reconciler waits for closed billing hours and refuses reconciliation while
+another GPU job is active. The runner can consequently encounter the same
+billing-wait defect during evaluation. No reservation deadline, ledger state,
+or frozen controller source has been changed to hide this risk.
