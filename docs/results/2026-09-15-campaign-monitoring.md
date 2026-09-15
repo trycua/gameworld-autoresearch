@@ -227,3 +227,26 @@ decisions. Verified per-episode progress and infrastructure failures are
 exported to OTel with phase `development-progress`, separate from final
 comparison metrics. Stable event IDs prevent duplicate log events on repeated
 audits. No full-suite score or improvement claim is made from partial results.
+
+## Continued monitoring through 03:49 UTC
+
+The operator and independent cleanup watchdog remained live throughout the
+subsequent checks. At 03:49 UTC, 66 development jobs had returned, two were
+active, and 68 remained pending. Independent replay verified 64 completed
+episodes across 33 games, including 3,840 recorded steps and final results.
+The two other returned jobs are preserved infrastructure failures, not
+successful evaluations: the earlier World's Hardest Game 2 baseline page-load
+timeout and a Vex 3 candidate game-initialization failure.
+
+Receipt: `independent-replay-20260915-034949.json`. OTel acknowledged the
+verified progress and failure events with no errors and zero pending logs.
+Observed concurrency remained at most two desktop evaluation jobs and one
+serving GPU. No candidate promotion or complete benchmark score is claimed.
+
+The serving deadline remains September 15 at 04:22:57 UTC and the controller
+deadline remains 05:00:37 UTC. The user was asked to authorize a 12-hour total
+operational window and serving replacement; no explicit answer has been
+received. Neither deadline nor the $2,000 Modal cap has been changed. The
+installed Modal SDK exposes no live timeout-extension method; a future
+authorized extension needs an explicit, bounded serving replacement and
+controller continuation mechanism, not a silent timestamp rewrite.
