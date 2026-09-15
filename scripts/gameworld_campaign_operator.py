@@ -11,9 +11,9 @@ import time
 
 from fps_bench.evaluation_contract import canonical, digest
 from fps_bench.gameworld_billing import ACTIVE_STATES, GameWorldModalReconciler, hour
-from fps_bench.gameworld_coordinator import GameWorldCoordinator
 from fps_bench.gameworld_research_worker import GameWorldResearchWorker
 from fps_bench.gameworld_runner import GameWorldProviderRunner, MODAL_FIELDS
+from scripts.gameworld_capacity_operations import CapacityCoordinator, replace_expired_serving
 
 
 class AppScopedReconciler(GameWorldModalReconciler):
@@ -110,6 +110,9 @@ class CampaignOperator:
                 workflow = self.coordinator.workflow(action['workflow'])
                 result = self.coordinator.prepare_training_dataset(workflow['action_id'])
                 return {'status': 'progress', 'dataset': result}
+        replacement = await replace_expired_serving(self.runner)
+        if replacement is not None:
+            return {'status': 'progress', 'replacement': replacement}
         result = await self.runner.run_once(2)
         if any(result[key] for key in ('dispatch', 'cleanup', 'transitions', 'admitted', 'research', 'billing')):
             return {'status': 'progress', 'result': result}
@@ -138,7 +141,7 @@ def main():
     for name in sorted(MODAL_FIELDS):
         parser.add_argument('--' + name.replace('_', '-'), required=True)
     args = parser.parse_args()
-    coordinator = GameWorldCoordinator(
+    coordinator = CapacityCoordinator(
         args.database, args.contract, args.contract_sha256, args.baseline, args.state_root,
         args.policy, args.catalog, args.telemetry, args.pool, private_splits=args.private_splits)
     coordinator.initialize(args.campaign, args.baseline_policy)

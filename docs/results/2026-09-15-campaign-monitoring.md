@@ -250,3 +250,39 @@ received. Neither deadline nor the $2,000 Modal cap has been changed. The
 installed Modal SDK exposes no live timeout-extension method; a future
 authorized extension needs an explicit, bounded serving replacement and
 controller continuation mechanism, not a silent timestamp rewrite.
+
+## Authorized operational extension at 04:39 UTC
+
+The user subsequently explicitly authorized extending the deadline and launching
+replacement capacity. The effective controller and research-supervisor deadline
+is now **September 15, 2026 at 11:00:37 UTC**, twelve hours from campaign creation.
+The original six-hour initialization duration remains recorded unchanged, alongside
+an append-only extension receipt and ledger event. Only the running research action
+deadline was extended; completed actions, job deadlines, reservations, private
+leases, and evaluation inputs were not changed. There were no private leases.
+
+Evidence: `operational-extension-20260915.json` in the coordinator state directory
+and the `gameworld_operational_extensions` table. The implementation is in
+`scripts/gameworld_capacity_operations.py`, outside the frozen evaluator sources.
+
+The previous serving sandbox stopped at its existing 04:22:57 deadline. Provider
+checks found no running sandboxes in either pinned Modal app, and the Fleet pool
+had no claims at 04:25:44. Evidence: `monitor-0424-provider-cleanup.json` and
+`monitor-0425-fleet-cleanup.json`. There are 74 returned development jobs (72
+completed episodes and two infrastructure failures), with 62 pending. Independent
+replay has verified all 4,320 completed steps and their final evaluations across
+all 34 games. This is not completion of all 170 catalog tasks or the comparison.
+
+The operational wrapper was restarted at 04:42 UTC with same-policy serving
+replacement support. It waits for authenticated closed-hour serving reconciliation
+at or after 05:00 UTC before reserving a new bounded three-hour L4 sandbox.
+Replacement uses the same authenticated adapter and frozen generation settings;
+the original candidate manifest and all work-item assignments remain immutable.
+Only the workflow's serving pointer changes after authenticated readiness. A
+coordinator view follows that pointer for cleanup without rewriting the historical
+serving work item. A fresh quote and reservation must pass the existing cap and
+single-GPU admission checks. There is no refund or extension of expired holds.
+
+The $2,000 Modal cap, no LiteLLM token budget, existing history, evaluator, reward,
+and episode limits remain unchanged. At this checkpoint replacement was configured
+but had not launched; no new score or candidate-improvement claim is made.
