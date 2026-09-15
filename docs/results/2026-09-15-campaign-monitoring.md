@@ -472,3 +472,25 @@ checks, and desktop smoke testing. The published image is
 An anonymous registry request verified its manifest digest. Receipts are in
 `image-build-34939956372/`; the active campaign pool remains on its original
 frozen image digest. No rollout of this new image into that pool occurred.
+
+## Cubefield candidate evaluation handoff
+
+At 08:00:37 UTC the source-serving bill reconciled ($0.149493 observed,
+$15 retained); at 08:01:38 UTC the training bill reconciled ($0.339512
+observed, $5 retained). Neither reconciliation refunded its conservative
+allocation. Candidate serving job `gw-0461fb92f68b1454caa928c2b4b1fdd5`
+then started and reported ready at 08:03:51 UTC, advancing
+`model-cubefield-steering-transfer` to `evaluating`.
+
+All 136 development comparison assignments are present: two admitted desktop
+episodes and 134 pending at the first checkpoint. The serving allocation remains
+bounded to three hours, with the deployed between-episode rollover mechanism
+available under the extended 17:00:37 UTC campaign deadline. The campaign's
+effective Modal commitment is $514.826741 of $2,000, including the new $15
+serving allocation; LiteLLM token enforcement remains disabled.
+
+The 08:07:24 independent replay checkpoint verified the frozen inputs but had
+no completed Cubefield comparison episodes yet. Serving handoff telemetry
+acknowledged both logs and metrics with no errors or pending logs. This is
+operational progress, not a benchmark result or terminal campaign completion.
+The operator, supervisor, gateway, and independent cleanup watchdog remain live.
