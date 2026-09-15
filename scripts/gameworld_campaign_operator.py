@@ -170,6 +170,7 @@ def main():
     parser.add_argument('--campaign', required=True)
     parser.add_argument('--pool', default='gameworld-autoresearch')
     parser.add_argument('--sft-source-catalog', type=Path)
+    parser.add_argument('--previous-database', type=Path)
     for name in sorted(MODAL_FIELDS):
         parser.add_argument('--' + name.replace('_', '-'), required=True)
     args = parser.parse_args()
@@ -178,7 +179,8 @@ def main():
         args.policy, args.catalog, args.telemetry, args.pool, private_splits=args.private_splits)
     coordinator.initialize(args.campaign, args.baseline_policy)
     research = GameWorldResearchWorker(
-        coordinator, args.state_root / 'research', sft_source_catalog=args.sft_source_catalog)
+        coordinator, args.state_root / 'research', sft_source_catalog=args.sft_source_catalog,
+        previous_database=args.previous_database)
     billing = AppScopedReconciler(coordinator.controller, args.state_root / 'billing')
     runner = GameWorldProviderRunner(
         coordinator, {name: getattr(args, name) for name in MODAL_FIELDS},

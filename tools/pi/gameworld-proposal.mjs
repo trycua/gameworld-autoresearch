@@ -193,7 +193,7 @@ async function generatePatch(context) {
     + 'Use only the supplied source files. Do not change tests, generated files, dependencies, evaluator behavior, or model behavior.',
   );
   return patchAgent.run(
-    'Create one ASCII git-style unified diff whose file set exactly equals the approved target_paths. '
+    'Create one UTF-8 git-style unified diff with ASCII paths whose file set exactly equals the approved target_paths. Preserve existing Unicode source context verbatim. '
       + 'Retain all required input contracts. Do not add, delete, rename, or chmod files. '
       + 'The patch will be checked with git apply and compiled in the pinned Fleet image.\n\n'
       + JSON.stringify(context),

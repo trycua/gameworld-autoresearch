@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import sqlite3
 import time
 from urllib import request
 
@@ -89,10 +90,13 @@ class PiResearchExecutor:
 
 
 class GameWorldResearchWorker:
-    def __init__(self, coordinator, output, executor=None, sft_source_catalog=None):
+    def __init__(self, coordinator, output, executor=None, sft_source_catalog=None, previous_database=None):
         self.coordinator = coordinator
         self.supervisor = coordinator.supervisor
         self.controller = coordinator.controller
+        self.previous_database = None if previous_database is None else Path(previous_database).resolve()
+        if self.previous_database == self.controller.ledger.path.resolve():
+            raise ValueError("Previous campaign must be distinct")
         self.output = Path(output)
         self.output.mkdir(parents=True, exist_ok=True)
         self.executor = executor or PiResearchExecutor()
@@ -163,24 +167,42 @@ class GameWorldResearchWorker:
         return sorted(set(files))
 
     def _history(self):
+        previous = []
+        if self.previous_database is not None:
+            connection = sqlite3.connect(self.previous_database.as_uri() + "?mode=ro", uri=True)
+            connection.row_factory = sqlite3.Row
+            try:
+                if (not connection.execute("SELECT stopped FROM controller").fetchone()[0]
+                        or connection.execute("SELECT 1 FROM jobs WHERE state!='cleaned' LIMIT 1").fetchone()):
+                    raise ValueError("Previous campaign history must be stopped and cleaned")
+                campaign = connection.execute("SELECT id FROM campaign").fetchone()[0]
+                previous = self._history_from(connection)
+                for row in previous:
+                    row["previous_campaign"] = campaign
+            finally:
+                connection.close()
         with self.controller.ledger.transaction() as connection:
-            hypotheses = []
-            for row in connection.execute(
-                    "SELECT id,round,track,manifest,state FROM gameworld_hypotheses ORDER BY round"):
-                value = {key: row[key] for key in ("id", "round", "track", "state")}
-                value["proposal"] = json.loads(row["manifest"])
-                action = connection.execute(
-                    "SELECT result FROM gameworld_actions WHERE hypothesis=?", (row["id"],)
-                ).fetchone()
-                value["result"] = None if action is None or action["result"] is None else json.loads(action["result"])
-                workflow = connection.execute(
-                    "SELECT state,decision FROM gameworld_workflows WHERE proposal_id=?", (row["id"],)
-                ).fetchone()
-                value["workflow"] = None if workflow is None else {
-                    "state": workflow["state"],
-                    "decision": None if workflow["decision"] is None else json.loads(workflow["decision"]),
-                }
-                hypotheses.append(value)
+            return previous + self._history_from(connection)
+
+    @staticmethod
+    def _history_from(connection):
+        hypotheses = []
+        for row in connection.execute(
+                "SELECT id,round,track,manifest,state FROM gameworld_hypotheses ORDER BY round"):
+            value = {key: row[key] for key in ("id", "round", "track", "state")}
+            value["proposal"] = json.loads(row["manifest"])
+            action = connection.execute(
+                "SELECT result FROM gameworld_actions WHERE hypothesis=?", (row["id"],)
+            ).fetchone()
+            value["result"] = None if action is None or action["result"] is None else json.loads(action["result"])
+            workflow = connection.execute(
+                "SELECT state,decision FROM gameworld_workflows WHERE proposal_id=?", (row["id"],)
+            ).fetchone()
+            value["workflow"] = None if workflow is None else {
+                "state": workflow["state"],
+                "decision": None if workflow["decision"] is None else json.loads(workflow["decision"]),
+            }
+            hypotheses.append(value)
         return hypotheses
 
     def recommended_track(self, history=None):

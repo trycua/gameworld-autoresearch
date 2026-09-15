@@ -121,7 +121,7 @@ GameWorld coordinator. When `fps_bench.gameworld_runner` is started with
 `--enable-research`, an idle campaign runs bounded browser-backed research, asks
 Astra for one structured proposal, validates it against the frozen baseline and
 registers its immutable bytes. Driver proposals then use Sol to produce only an
-ASCII unified diff over the approved source files; the Fleet worker still performs
+UTF-8 unified diff with ASCII paths over the approved source files; the Fleet worker still performs
 `git apply --check`, rebuilds the bundled driver and runs every input contract.
 
 Before proposal synthesis or patch generation starts, the trusted worker

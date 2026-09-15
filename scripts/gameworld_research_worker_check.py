@@ -4,6 +4,7 @@ import asyncio
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+import sqlite3
 import threading
 import unittest
 from unittest.mock import patch
@@ -131,6 +132,32 @@ class ResearchWorkerTests(unittest.TestCase):
         self.assertEqual(len(history), 1)
         self.assertEqual(history[0]["id"], proposal["id"])
         self.assertEqual(history[0]["proposal"], proposal)
+
+    def test_previous_campaign_uses_existing_history_read_only(self):
+        proposal = self.fixture.fixture.driver_proposal("prior-history")
+        self.coordinator.register(proposal)
+        previous = self.fixture.root / "previous.sqlite"
+        source = sqlite3.connect(self.coordinator.controller.ledger.path)
+        target = sqlite3.connect(previous)
+        try:
+            source.backup(target)
+            target.execute("UPDATE controller SET stopped=1")
+            target.commit()
+        finally:
+            source.close()
+            target.close()
+        before = previous.read_bytes()
+        worker = GameWorldResearchWorker(self.coordinator, self.fixture.root / "lineage-worker",
+                                        Executor(), previous_database=previous)
+        history = worker.proposal_context()["history"]
+        self.assertEqual(history[0]["proposal"], proposal)
+        self.assertIn("previous_campaign", history[0])
+        self.assertNotIn("previous_campaign", history[1])
+        self.assertEqual(previous.read_bytes(), before)
+        with sqlite3.connect(previous) as connection:
+            connection.execute("UPDATE controller SET stopped=0")
+        with self.assertRaisesRegex(ValueError, "stopped and cleaned"):
+            worker.proposal_context()
 
     def test_gateway_preflight_failure_does_not_consume_research_attempt(self):
         worker = self.worker(Executor(preflight_fail=True))

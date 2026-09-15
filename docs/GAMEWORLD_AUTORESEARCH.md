@@ -58,7 +58,7 @@ supervisor contract or mutate the frozen compatibility evidence.
 ## Driver candidates
 
 `scripts/gameworld_driver_worker.py` accepts only a canonical approved proposal
-and a pure ASCII unified diff. It rejects new, deleted, renamed or binary files
+and a UTF-8 unified diff with strict ASCII paths. It rejects new, deleted, renamed or binary files
 and paths outside the three allowlisted driver source trees. The worker applies
 the patch inside an ephemeral Fleet claim, rebuilds from the baked offline Cargo
 cache, requires a changed installed binary, runs Rust contract tests, and then
