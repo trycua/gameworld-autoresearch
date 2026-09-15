@@ -23,16 +23,16 @@ def validate_patch(data, allowed_prefixes):
     if not isinstance(data, bytes) or not data or len(data) > MAX_PATCH_BYTES or b"\0" in data:
         raise ValueError("Driver patch must be nonempty text below 1 MiB")
     try:
-        text = data.decode("ascii")
+        text = data.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise ValueError("Driver patch paths and content must be ASCII") from error
+        raise ValueError("Driver patch content must be valid UTF-8") from error
     prefixes = tuple(allowed_prefixes)
     if not prefixes:
         raise ValueError("Driver patch requires an allowlist")
     files = []
     current = None
     old_header = new_header = hunk = False
-    for line in text.splitlines():
+    for line in text.split("\n"):
         if len(line) > 20000:
             raise ValueError("Driver patch line exceeds the parser bound")
         if line.startswith(FORBIDDEN_HEADERS):

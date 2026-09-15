@@ -374,7 +374,7 @@ class GameWorldResearchWorker:
                     or not isinstance(result["rationale"], str) or not result["rationale"].strip()
                     or len(result["rationale"]) > 4000):
                 raise ValueError("Pi patch output has an invalid schema")
-            patch = result["patch"].encode("ascii")
+            patch = result["patch"].encode("utf-8")
             manifest = validate_patch(patch, self.supervisor.policy["driver"]["allowed_source_prefixes"])
             if set(manifest["paths"]) != set(context["proposal"]["experiment"]["target_paths"]):
                 raise ValueError("Pi patch paths differ from the approved proposal")

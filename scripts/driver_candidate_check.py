@@ -30,6 +30,18 @@ class PatchTests(unittest.TestCase):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 validate_patch(patch(path), PREFIXES)
 
+    def test_accepts_utf8_body_without_relaxing_paths(self):
+        body = patch().replace(b"-old", "-old \u2014 comment".encode("utf-8"))
+        self.assertEqual(validate_patch(body, PREFIXES)["bytes"], len(body))
+        with self.assertRaises(ValueError):
+            validate_patch(patch("cua-driver/rust/crates/platform-linux/src/\u00e9.rs"), PREFIXES)
+        with self.assertRaisesRegex(ValueError, "UTF-8"):
+            validate_patch(patch().replace(b"-old", b"-\xff"), PREFIXES)
+
+    def test_unicode_line_separator_in_body_is_not_a_diff_header(self):
+        body = patch().replace(b"-old", "-old\u2028diff --git not a header".encode("utf-8"))
+        self.assertEqual(len(validate_patch(body, PREFIXES)["paths"]), 1)
+
     def test_rejects_new_deleted_binary_and_renamed_files(self):
         for marker in ("new file mode 100644", "deleted file mode 100644", "GIT binary patch",
                        "rename from old"):

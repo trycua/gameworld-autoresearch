@@ -37,7 +37,7 @@ class Executor:
         target = context["proposal"]["experiment"]["target_paths"][0]
         result = {
             "patch": (f"diff --git a/{target} b/{target}\n--- a/{target}\n+++ b/{target}\n"
-                      "@@ -1 +1 @@\n-old\n+new\n"),
+                      "@@ -1 +1 @@\n-old \u2014 context\n+new \u2014 context\n"),
             "rationale": "Synthetic reversible input-delivery change.",
         }
         Path(output_path).write_text(json.dumps(result))
