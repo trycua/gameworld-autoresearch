@@ -336,3 +336,34 @@ at this checkpoint; the active serving reservation remains held. No candidate
 decision or promotion exists yet. The operator and cleanup watchdog remain active.
 The complete comparison, subsequent research transitions, terminal outcomes, and
 final billing and provider cleanup remain outstanding.
+
+## First complete model comparison and automatic research handoff
+
+The 136-job model comparison finished at approximately 06:33 UTC. A separate
+assignment audit verified the complete Cartesian product of 34 development tasks,
+two repeats, and parent/candidate policies: 68 jobs per policy, no duplicate
+assignments, and all 136 jobs cleaned. There were 132 completed episodes and four
+startup failures. Independent replay verified all 7,920 steps and final evaluations
+for the completed episodes. Receipts: `comparison-completion-20260915.json` and
+`independent-replay-20260915-063449.json`.
+
+The two additional failures were candidate Geodash repeat 1 (30-second timeout
+waiting for `window.gameAPI.getState`) and candidate Vex 3 repeat 1 (`GameWorld init
+failed`). Their failed artifact bundles were retained and verified. The other
+three Geodash assignments completed. No retry, evaluator modification, or
+preemptive gameplay patch was introduced.
+
+The frozen decision was `infrastructure_failure`, with four failed episodes and
+`success_rate=null`; the workflow was rejected and the baseline remains champion.
+This is not evidence that the trained policy improves or regresses performance.
+The replacement serving sandbox terminated automatically at 06:33 UTC. Authenticated
+provider inspection at 06:37 found both Modal apps empty, the serving sandbox
+terminal, and no campaign Fleet claims. Receipt:
+`comparison-provider-cleanup-20260915.json`. Its reservation remains billing-pending
+until an eligible closed-hour reconciliation; it has not been refunded.
+
+The operator automatically started `round-5-driver` research using the existing
+history mechanism. Its persisted context contains the completed model action,
+rejection, and exact infrastructure-failure decision. The handoff audit verifies
+that context against the ledger; no parallel hypothesis history was introduced.
+The full campaign remains active, with further research and final billing outstanding.
