@@ -205,3 +205,25 @@ reported progress. This does not establish a candidate improvement.
 The post-reconciliation OTel export (`operator-0200-telemetry.json`) acknowledged
 logs and metrics with no errors and zero pending logs. Evaluation and monitoring
 remain active; full campaign completion and final cleanup are not yet proved.
+
+## Independent evaluation replay during collection
+
+By approximately 02:22 UTC, 13 completed development episodes independently
+replayed through the pinned upstream evaluator: 780 steps and each final
+evaluation matched their recorded results. The audit also verified controller
+receipt bindings, every exported artifact hash, frozen catalog/task hashes,
+and agreement between exported summaries and controller scalars.
+
+One additional baseline episode on `34_worlds-hardest-game-2--34_03` failed
+before evaluation: Playwright timed out after 30 seconds waiting for the local
+game page's `load` event. Its failed artifact bundle is retained and verified;
+it is not included in the 13 successful replays. No retry or parser/navigation
+change was introduced. The candidate episode on the same task completed, so
+this observation alone does not show that the game is unsupported.
+
+Receipt: `independent-replay-20260915-022201.json`. The independent audit script
+is `/tmp/gameworld-v9-replay.py`; it does not launch games or modify campaign
+decisions. Verified per-episode progress and infrastructure failures are
+exported to OTel with phase `development-progress`, separate from final
+comparison metrics. Stable event IDs prevent duplicate log events on repeated
+audits. No full-suite score or improvement claim is made from partial results.
