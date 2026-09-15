@@ -1,13 +1,14 @@
 """Offline protobuf/outbox checks; run in the telemetry optional-dependency environment."""
 
 import math
+import json
 from pathlib import Path
 import tempfile
 import unittest
 
 from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import ExportLogsServiceRequest, ExportLogsServiceResponse
 from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceRequest, ExportMetricsServiceResponse
-from fps_bench.telemetry import ResearchTelemetry
+from fps_bench.telemetry import MAX_METRIC_SERIES, ResearchTelemetry
 
 
 class TelemetryTests(unittest.TestCase):
@@ -138,6 +139,37 @@ class TelemetryTests(unittest.TestCase):
                                   {"gameworld_train_loss": 1})
         with self.assertRaises(ValueError):
             self.telemetry.record("extra", "gameworld-train", {"experiment": "extra"}, {"gameworld_train_loss": 1})
+
+    def test_multi_game_comparisons_fit_without_rewriting_events(self):
+        values = {"gameworld_eval_completed_episodes": 1,
+                  "gameworld_eval_failed_episodes": 0,
+                  "gameworld_eval_success_rate": 0,
+                  "gameworld_eval_mean_progress": 0,
+                  "gameworld_eval_seconds": 1}
+        for candidate in range(4):
+            for task in range(34):
+                self.telemetry.record(f"candidate-{candidate}-task-{task}", "gameworld-eval",
+                                      {"experiment": f"candidate-{candidate}",
+                                       "task": f"task-{task}", "phase": "development-progress"}, values)
+        original = self.telemetry.snapshot()
+        reopened = ResearchTelemetry(self.path, "offline-tests", transport=self.transport)
+        self.assertEqual(original, reopened.snapshot())
+        with reopened.connect() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM series").fetchone()[0], 680)
+        self.assertTrue(reopened.flush()["metrics"])
+
+    def test_metric_series_limit_still_rejects_new_series_atomically(self):
+        with self.telemetry.connect() as connection:
+            connection.executemany("INSERT INTO series VALUES (?)", [
+                (json.dumps(["gameworld-train", {"experiment": "smoke", "task": f"task-{index}"},
+                             "gameworld_train_loss"], sort_keys=True),)
+                for index in range(MAX_METRIC_SERIES)])
+        with self.assertRaisesRegex(ValueError, "metric series cardinality"):
+            self.record()
+        self.assertEqual(self.telemetry.snapshot(), [])
+        with self.telemetry.connect() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM series").fetchone()[0], MAX_METRIC_SERIES)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM experiments").fetchone()[0], 0)
 
     def test_endpoint_credentials_and_remote_plaintext_rejected(self):
         for endpoint in ["http://example.com", "https://user:secret@example.com", "https://example.com?token=x"]:

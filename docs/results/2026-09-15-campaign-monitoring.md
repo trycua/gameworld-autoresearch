@@ -518,3 +518,23 @@ logs and metrics with no errors and zero pending logs.
 Receipts: `provider-capacity-20260915-0810.json` (its embedded timestamp is
 08:13:46), `cubefield-progress-20260915-0832.json`, and the replay receipt above.
 Monitoring and terminal cleanup verification remain unfinished.
+
+## Multi-game telemetry capacity repair
+
+At 09:48 UTC, independent replay hit the telemetry exporter's 512-series guard.
+The database already held 511 series, including 485 development-progress series
+across baseline and trained candidates. Evaluation continued; this was an
+observer/export failure, not a changed game result or failed model episode.
+
+The exporter now permits at most 4,096 series while retaining the existing
+12-experiment limit, event identity, labels, timestamps, and outbox. The bound
+accommodates multiple 34-task comparisons without discarding task-level data.
+No historical series or events were removed, and no frozen source was edited.
+Regression tests exercise 680 series across four policies and 34 tasks, restart
+preservation, and atomic rejection at the new finite limit. All 14 telemetry
+tests pass.
+
+Replay resumed successfully at 09:52:05 UTC: 72 completed episodes and 4,320
+steps verified. The running operator still has the earlier exporter loaded;
+deploy the update at the next idle capacity/billing boundary, not during an
+episode. Receipt: `independent-replay-20260915-095205.json`.

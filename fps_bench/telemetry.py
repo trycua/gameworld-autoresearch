@@ -28,6 +28,7 @@ METRICS = {
 SERVICES = {"gameworld-research", "gameworld-eval", "gameworld-train"}
 ATTRIBUTES = {"experiment", "phase", "split", "task", "change_class", "outcome", "objective"}
 LABEL = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+MAX_METRIC_SERIES = 4096
 
 
 class NoRedirect(request.HTTPRedirectHandler):
@@ -120,7 +121,7 @@ class ResearchTelemetry:
                 raise ValueError("Campaign experiment cardinality exceeded")
             existing_series = {row[0] for row in connection.execute("SELECT id FROM series")}
             new_series = {json.dumps([service, attributes, name], sort_keys=True) for name in values}
-            if len(existing_series | new_series) > 512:
+            if len(existing_series | new_series) > MAX_METRIC_SERIES:
                 raise ValueError("Campaign metric series cardinality exceeded")
             connection.execute("INSERT OR IGNORE INTO experiments VALUES (?)", (attributes["experiment"],))
             connection.executemany("INSERT OR IGNORE INTO series VALUES (?)", [(key,) for key in new_series])
