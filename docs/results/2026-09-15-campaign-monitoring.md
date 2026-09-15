@@ -314,3 +314,25 @@ All 25 operational, serving-identity, runner, and billing checks pass, and froze
 contract source verification passes. Commit `254c07d` contains the operational
 implementation. The operator, gateway, and independent cleanup watchdog remain
 active; remaining evaluations and terminal campaign cleanup are still outstanding.
+
+## OODA monitoring through 05:43 UTC
+
+The comparison advanced to 100 returned jobs: 98 completed episodes and the same
+two preserved infrastructure failures. Two further jobs were active and 34 were
+pending. Independent replay verified all 98 completed episodes, 5,880 steps, and
+their final evaluations. Receipt: `independent-replay-20260915-054349.json`; OTel
+acknowledged logs and metrics with no errors and zero pending logs.
+
+Provider observation confirmed exactly one sandbox in the pinned serving app and
+none in the training app. Fleet observation confirmed two bound claims using the
+campaign template. Claim ownership must use the template reference: these claims
+report `warmpool=default`, so filtering only by the pool name omits them. The
+corrected receipt is `fleet-observation-20260915-0514.json`; it supersedes the
+claim filter in `provider-observation-20260915-051320.json` (whose Modal app
+observation remains valid). No pool scaling configuration was changed.
+
+Conservative Modal commitment remains $479.826741, with no billing-pending jobs
+at this checkpoint; the active serving reservation remains held. No candidate
+decision or promotion exists yet. The operator and cleanup watchdog remain active.
+The complete comparison, subsequent research transitions, terminal outcomes, and
+final billing and provider cleanup remain outstanding.
