@@ -188,3 +188,20 @@ At 01:36 UTC the wrapper reported `waiting-billing`, preserving the pending
 evaluation queue and the $2,000 cap. Earliest training-app reconciliation is
 02:00 UTC. The serving GPU remains live under its existing reservation; its
 idle time still incurs cost. This wait does not extend its resource deadline.
+
+At 02:00:04 UTC, the operational wrapper successfully reconciled both training
+jobs against the closed training-app hour while the serving GPU remained
+live. The authenticated receipt observed $0.149678 and retained the full $10
+allocation without refund. Both training jobs became `cleaned`; no held
+reservation expiry was extended or ignored. The wrapper automatically
+dispatched the next two evaluation episodes at 02:00:06 UTC.
+
+Evidence: `billing/gw-modal-billing-8311f4186b51129e4248eb9bf5b3a96b/`,
+`operator.log`, and ledger events 724-734. The first completed parent/candidate
+pair remains preserved: both executed 60 actions on Captain Callisto, with
+zero invalid actions and zero driver errors, but neither succeeded or made
+reported progress. This does not establish a candidate improvement.
+
+The post-reconciliation OTel export (`operator-0200-telemetry.json`) acknowledged
+logs and metrics with no errors and zero pending logs. Evaluation and monitoring
+remain active; full campaign completion and final cleanup are not yet proved.
