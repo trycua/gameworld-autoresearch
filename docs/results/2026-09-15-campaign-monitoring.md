@@ -566,3 +566,56 @@ All 136 assignments remain distinct; none was retried or rewritten. Receipt:
 The replacement reserves $13.813600, bringing conservative Modal commitment
 to $528.640341 of $2,000. The campaign deadline remains 17:00:37 UTC, with
 no LiteLLM token limit. Comparison completion and final cleanup remain pending.
+
+## Terminal outcome and cleanup
+
+The Cubefield comparison returned all 136 assignments by 11:47:55 UTC.
+Independent replay verified 132 completed episodes and all 7,920 steps,
+plus the four preserved startup-failure artifacts. The frozen decision was
+`infrastructure_failure`, with no success-rate estimate or promotion. All
+136 evaluation jobs were cleaned and replacement serving was terminated.
+Round seven received that decision through the existing research history.
+
+Round seven proposed `driver-hold-deadline-preservation`. Its three patch
+materialization attempts failed with `UnicodeEncodeError`, triggering the
+existing campaign stop at 11:58:43 UTC. The generated diffs each included an
+unchanged source-comment context line containing an em dash. Source ingestion
+accepts UTF-8, but `GameWorldResearchWorker.materialize_driver_patch` encodes
+the entire diff as ASCII, and `validate_patch` also requires ASCII bodies.
+This is a transport/validation mismatch, not evidence against the driver
+hypothesis. No candidate binary was built for this proposal.
+
+The stop and all three generated patch artifacts remain intact. The pending
+workflow still records `awaiting_patch`, and the supervisor's metadata still
+records `running`; the authoritative controller is stopped and all execution
+processes have exited. These records were not rewritten to manufacture a
+successful research outcome. A future protocol should accept UTF-8 diff bodies
+while retaining strict ASCII path validation, with regression tests for existing
+Unicode context. Both affected source files are frozen in this campaign, so
+the repair must not be deployed beneath its existing contract or used to reset
+its exhausted failure counter.
+
+Final closed-hour reconciliation completed after 12:00 UTC: replacement serving
+cost $1.695430 observed, with its full $13.813600 allocation retained. All Modal
+reservations are reconciled or settled; none remains held. Conservative total
+commitment is $528.640341 against the unchanged $2,000 cap, not a final invoice
+claim. LiteLLM token enforcement remains disabled.
+
+The final audit reverified frozen sources and both full development comparisons
+(264 completed episodes, 15,840 replayed steps, eight failed startup artifacts).
+Across the entire campaign database, including its earlier validation work,
+all 296 jobs have controller and provider cleanup receipts: 273 evaluations,
+five rollouts, four driver builds, nine serving jobs, and five training jobs.
+Direct provider checks found no live dedicated Modal sandboxes or campaign
+Fleet claims. There are no active private leases, held reservations, running
+research attempts, or promotions; the baseline remains champion. Terminal OTel
+logs and metrics were acknowledged with no errors and zero pending logs.
+The now-unneeded cleanup watchdog was terminated after those checks.
+
+Authoritative receipts: `terminal-audit-20260915.json`,
+`terminal-billing-20260915-1200.json`,
+`independent-replay-20260915-120537.json`, and
+`independent-replay-20260915-120601.json`. The terminal audit binds the other
+receipts by SHA256. Monitoring has reached a verified terminal failure with
+cleanup complete, not a successful research result or completed 170-task
+evaluation. No further campaign work was launched.
