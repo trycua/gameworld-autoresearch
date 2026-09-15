@@ -286,3 +286,31 @@ single-GPU admission checks. There is no refund or extension of expired holds.
 The $2,000 Modal cap, no LiteLLM token budget, existing history, evaluator, reward,
 and episode limits remain unchanged. At this checkpoint replacement was configured
 but had not launched; no new score or candidate-improvement claim is made.
+
+## Replacement verified and evaluations resumed
+
+At 05:00:43 UTC, authenticated serving-app reconciliation completed for all three
+previous serving jobs. It observed $6.639345 and retained the entire $45 allocation
+without refund. Receipt directory:
+`billing/gw-modal-billing-4452b8e7201f6b3ff01b84f1e4e7b617/`.
+
+The fresh serving job `gw-replace-eb46807e38d919c60c7358bc` passed authenticated
+readiness at 05:02:55 UTC on sandbox `sb-0vdjVQmN9fjIhA2cTBwvOy`. Its new
+three-hour resource deadline is **08:00:43 UTC**, separate from the extended
+11:00:37 campaign deadline. Its fresh reservation is $13.813600; total conservative
+Modal commitment is $479.826741 of $2,000, not a statement of actual billed spend.
+Both parent and candidate policy digests match their previous serving generation.
+Evidence: `capacity-replacement-verification-20260915.json`, serving launch records,
+and the `serving_capacity_replaced` ledger event.
+
+The first resumed parent/candidate pair on Cubefield completed at approximately
+05:08 UTC, with 60 actions per episode, and both claims were cleaned. Independent
+replay at 05:09 verified 74 completed episodes and all 4,440 steps plus final
+results; the two earlier infrastructure failures remain preserved separately.
+Receipt: `independent-replay-20260915-050911.json`. Runner accounting and replay
+telemetry were delivered to OTel with no errors and zero pending logs.
+
+All 25 operational, serving-identity, runner, and billing checks pass, and frozen
+contract source verification passes. Commit `254c07d` contains the operational
+implementation. The operator, gateway, and independent cleanup watchdog remain
+active; remaining evaluations and terminal campaign cleanup are still outstanding.
