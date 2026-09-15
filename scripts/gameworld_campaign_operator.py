@@ -92,8 +92,8 @@ class CampaignOperator:
                 (int(time.time()) + 30,))}
             for job in connection.execute(
                     "SELECT j.id FROM gameworld_workflows w JOIN jobs j "
-                    "ON j.id=json_extract(w.details,'$.serving_job') "
-                    "WHERE w.state='evaluating' AND w.track='model' AND j.state='billing_pending' "
+                    "ON j.id=COALESCE(json_extract(w.details,'$.serving_job'),json_extract(w.details,'$.source_serving_job')) "
+                    "WHERE w.state='evaluating' AND w.track IN ('model','driver') AND j.state='billing_pending' "
                     "AND EXISTS (SELECT 1 FROM gameworld_work_items i WHERE i.workflow=w.proposal_id "
                     "AND i.kind='evaluation' AND i.state='pending')"):
                 waits.update(row['id'] for row in connection.execute(

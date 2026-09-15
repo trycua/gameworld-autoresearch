@@ -458,3 +458,17 @@ timeout plus margin. It reconciles that capacity before an authenticated
 same-policy replacement, retaining all pending assignments. Tests cover avoiding
 interruption of admitted episodes and waiting on the old unexpired hold.
 All 42 selected checks, static image validation, and frozen-source verification pass.
+
+The guarded support backend and rollover operator were deployed during the idle
+billing wait at 07:25 UTC. Rollover also covers driver-only development comparisons
+using source serving: it preserves their driver manifest and source policy,
+updates only the serving-generation pointer, and keeps the original queue row.
+The source-serving path is exercised through the real lifecycle with a mocked
+provider in the offline suite. All 46 selected checks pass.
+
+Image build `34939956372` succeeded, including native builds, offline rebuild
+checks, and desktop smoke testing. The published image is
+`ghcr.io/trycua/gameworld-autoresearch@sha256:fe5cd0b1ad962bf10b543aec738cdd724a8a864d4680e910b87bdc0325936d5b`.
+An anonymous registry request verified its manifest digest. Receipts are in
+`image-build-34939956372/`; the active campaign pool remains on its original
+frozen image digest. No rollout of this new image into that pool occurred.

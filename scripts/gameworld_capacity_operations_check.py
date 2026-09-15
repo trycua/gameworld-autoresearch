@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 from fps_bench.campaign_ledger import BudgetRefused, LedgerConflict
 from fps_bench.gameworld_serving import GameWorldServingLifecycle
-from scripts.gameworld_capacity_operations import CapacityCoordinator, extend_deadline, pause_expiring_serving, ReplacementController
+from scripts.gameworld_capacity_operations import CapacityCoordinator, extend_deadline, pause_expiring_serving, replace_expired_serving, ReplacementController
 from scripts import gameworld_runner_check, gameworld_serving_check, gameworld_coordinator_check
 
 
@@ -169,6 +169,51 @@ class EpisodeBoundaryTests(unittest.TestCase):
             connection.execute('UPDATE jobs SET deadline=? WHERE id=?', (int(time.time()) + 10800, self.job))
         self.assertIsNone(asyncio.run(pause_expiring_serving(self.runner)))
         self.runner.cleanup_serving_job.assert_not_awaited()
+
+
+class DriverEpisodeBoundaryTests(EpisodeBoundaryTests):
+    def setUp(self):
+        self.fixture = gameworld_coordinator_check.CoordinatorTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.fixture.test_driver_patch_routes_to_paired_full_gameworld_evaluation()
+        self.coordinator = self.fixture.coordinator
+        self.coordinator.__class__ = CapacityCoordinator
+        self.controller = self.coordinator.controller
+        self.workflow = self.coordinator.workflow('driver-action')
+        self.job = self.workflow['details']['source_serving_job']
+        self.runner = SimpleNamespace(controller=self.controller, coordinator=self.coordinator,
+                                      cleanup_serving_job=AsyncMock(), modal_config={})
+        extend_deadline(self.controller, 'authorized replacement')
+        with self.controller.ledger.transaction() as connection:
+            connection.execute('UPDATE jobs SET deadline=? WHERE id=?', (int(time.time()) + 600, self.job))
+
+    def test_source_replacement_keeps_driver_manifest_and_queue(self):
+        from fps_bench.gameworld_runner import GameWorldProviderRunner
+        self.controller.provider_cleanup_confirmed(self.job, 'source-stopped')
+        self.controller.settle_job(self.job, {'modal_micro_usd': 1000}, 'source-test-bill')
+        original = self.coordinator._candidate(self.workflow['candidate_id'])
+        backend = gameworld_serving_check.Backend()
+        lifecycle = GameWorldServingLifecycle(self.controller, self.coordinator.state_root / 'serving', backend)
+        config = {**gameworld_runner_check.MODAL, 'environment': 'gameworld-test',
+                  'environment_id': 'en-test', 'serving_app': 'gameworld-test-serving', 'serving_app_id': 'ap-test'}
+        runner = GameWorldProviderRunner(self.coordinator, config, {'QWEN_API_KEY': 'x' * 32},
+                                        serving_lifecycle=lifecycle)
+        with patch('fps_bench.gameworld_serving.authenticated_request',
+                   return_value={'data': [{'id': original['model']['served_model']}]}):
+            result = asyncio.run(replace_expired_serving(runner))
+            self.assertIsNone(asyncio.run(replace_expired_serving(runner)))
+        self.assertEqual(result['policy_sha256'], original['policy_sha256'])
+        self.assertEqual(self.coordinator._candidate(self.workflow['candidate_id']), original)
+        current = self.coordinator.workflow('driver-action')
+        self.assertEqual(current['details']['source_serving_job'], result['job_id'])
+        phase = current['details']['source_serving_phase']
+        item = self.coordinator._items(current['proposal_id'], phase)[0]
+        self.assertEqual(item['job_id'], result['job_id'])
+        self.assertEqual(item['state'], 'live')
+        with self.controller.ledger.transaction() as connection:
+            self.assertEqual(connection.execute('SELECT job_id FROM gameworld_work_items WHERE id=?', (item['id'],)).fetchone()[0], self.job)
+        self.assertEqual(len(self.coordinator._items(current['proposal_id'], 'development')), 136)
 
 
 if __name__ == '__main__':

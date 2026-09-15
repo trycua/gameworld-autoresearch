@@ -6,6 +6,7 @@ import time
 from fps_bench.campaign_ledger import LedgerConflict
 from fps_bench.evaluation_contract import canonical, digest
 from fps_bench.gameworld_coordinator import GameWorldCoordinator
+from fps_bench.gameworld_grpo import policy_digest
 from fps_bench.gameworld_serving import GameWorldServingLifecycle, compute_reservation
 
 
@@ -46,11 +47,12 @@ def extend_deadline(controller, authorization, total_seconds=43200):
 class CapacityCoordinator(GameWorldCoordinator):
     def _items(self, workflow, phase=None):
         rows = super()._items(workflow, phase)
-        current = self.workflow(workflow)['details'].get('serving_job')
-        if current is None:
-            return rows
+        details = self.workflow(workflow)['details']
+        pointers = {'serving': details.get('serving_job'),
+                    details.get('source_serving_phase'): details.get('source_serving_job')}
         for row in rows:
-            if row['phase'] != 'serving' or row['job_id'] == current:
+            current = pointers.get(row['phase'])
+            if current is None or row['job_id'] == current:
                 continue
             with self.controller.ledger.transaction() as connection:
                 job = dict(self.controller._job(connection, current))
@@ -103,10 +105,11 @@ async def pause_expiring_serving(runner):
                               "AND state IN ('reserved','dispatching','running','cleanup_pending')").fetchone():
             return None
         workflows = [coordinator._workflow(connection, row[0]) for row in connection.execute(
-            "SELECT proposal_id FROM gameworld_workflows WHERE state='evaluating' AND track='model'")]
+            "SELECT proposal_id FROM gameworld_workflows WHERE state='evaluating' AND track IN ('model','driver')")]
         due = []
         for workflow in workflows:
-            job = controller._job(connection, workflow['details']['serving_job'])
+            details = workflow['details']
+            job = controller._job(connection, details.get('serving_job') or details['source_serving_job'])
             timeout = connection.execute(
                 "SELECT MAX(timeout_seconds) FROM gameworld_work_items WHERE workflow=? "
                 "AND kind='evaluation' AND state='pending'", (workflow['proposal_id'],)).fetchone()[0]
@@ -133,9 +136,10 @@ async def replace_expired_serving(runner):
         if not authorization:
             return None
         workflows = [coordinator._workflow(connection, row[0]) for row in connection.execute(
-            "SELECT proposal_id FROM gameworld_workflows WHERE state='evaluating' AND track='model'")]
+            "SELECT proposal_id FROM gameworld_workflows WHERE state='evaluating' AND track IN ('model','driver')")]
     for workflow in workflows:
-        old_id = workflow['details']['serving_job']
+        pointer = 'serving_job' if 'serving_job' in workflow['details'] else 'source_serving_job'
+        old_id = workflow['details'][pointer]
         with controller.ledger.transaction() as connection:
             old = dict(controller._job(connection, old_id))
         if old['state'] not in ('cleaned', 'billing_pending'):
@@ -165,27 +169,33 @@ async def replace_expired_serving(runner):
             spec = resumed_spec
             if existing['state'] in ('cleaned', 'billing_pending'):
                 raise LedgerConflict('Replacement attempt already ended; requires operator review')
-        lifecycle = GameWorldServingLifecycle(ReplacementController(controller, new_id),
+        source = spec['assignment'].get('mode') == 'source'
+        lifecycle = GameWorldServingLifecycle(controller if source else ReplacementController(controller, new_id),
                                              coordinator.state_root / 'serving', runner.serving.backend)
         config = runner.modal_config
         with controller.ledger.transaction() as connection:
             prepared = connection.execute('SELECT 1 FROM gameworld_serving_launches WHERE job_id=?', (new_id,)).fetchone()
         if not prepared:
-            await lifecycle.prepare(new_id, coordinator.state_root / 'modal' / spec['assignment']['training_job'],
-                                    runner.parent_adapter(spec['candidate']), workspace=config['workspace'],
-                                    app=config['serving_app'], environment=config['environment'],
-                                    environment_id=config['environment_id'], image_id=config['serving_image_id'],
-                                    app_id=config['serving_app_id'], isolation_policy='app-scoped')
+            common = {'workspace': config['workspace'], 'app': config['serving_app'],
+                      'environment': config['environment'], 'environment_id': config['environment_id'],
+                      'image_id': config['serving_image_id'], 'app_id': config['serving_app_id'],
+                      'isolation_policy': 'app-scoped'}
+            if source:
+                await lifecycle.prepare_source(new_id, runner.policy_seed(spec['candidate']),
+                                               runner.parent_adapter(spec['candidate']), **common)
+            else:
+                await lifecycle.prepare(new_id, coordinator.state_root / 'modal' / spec['assignment']['training_job'],
+                                        runner.parent_adapter(spec['candidate']), **common)
         result = await lifecycle.start(new_id, runner.candidate_api_key)
         with controller.ledger.transaction() as connection:
             current = coordinator._workflow(connection, workflow['proposal_id'])
-            if current['details']['serving_job'] != old_id or current['state'] != 'evaluating':
+            if current['details'][pointer] != old_id or current['state'] != 'evaluating':
                 raise LedgerConflict('Workflow moved during capacity replacement')
-            details = {**current['details'], 'serving_job': new_id, 'policy_path': result['policy_path']}
+            details = {**current['details'], pointer: new_id, 'policy_path': result['policy_path']}
             connection.execute('UPDATE gameworld_workflows SET details=? WHERE proposal_id=?',
                                (canonical(details).decode(), workflow['proposal_id']))
             receipt = {'workflow': workflow['proposal_id'], 'previous_job': old_id, 'job_id': new_id,
-                       'policy_sha256': result['candidate']['policy_sha256'],
+                       'policy_sha256': policy_digest(result['policy_identity']),
                        'authorization': json.loads(authorization['receipt'])['authorization']}
             controller.ledger._event(connection, 'serving_capacity_replaced', receipt)
         return receipt
