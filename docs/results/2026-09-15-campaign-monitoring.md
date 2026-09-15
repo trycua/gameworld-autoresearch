@@ -144,3 +144,47 @@ reconciler waits for closed billing hours and refuses reconciliation while
 another GPU job is active. The runner can consequently encounter the same
 billing-wait defect during evaluation. No reservation deadline, ledger state,
 or frozen controller source has been changed to hide this risk.
+
+## Operational wrapper handover
+
+The billing risk was addressed through a separate host-side operational
+entrypoint, `scripts/gameworld_campaign_operator.py`. It invokes the existing
+coordinator, provider runner, and conservative reconciliation APIs. It does
+not replace the evaluator or change any frozen source file. A full workspace
+verification against the existing contract passed after the change.
+
+The wrapper:
+
+- Waits before dispatch when a held reservation is expired or within 30 seconds
+  of expiry, instead of turning an accounting wait into a candidate failure.
+- Continues cleanup and authenticated billing checks during that wait.
+- Registers completed GRPO datasets using the existing coordinator action.
+- Selects completed billing scopes per app, allowing the stopped training app
+  to reconcile while the separate serving app remains live. It still requires
+  a completed UTC billing hour, authenticated provider closure, no active
+  resources within the selected app, and full retained allocations without
+  refunds. Unknown/unbound holds prevent reconciliation.
+- Uses a single-operator lock and prints structured progress to `operator.log`.
+
+Seven new offline checks cover waits without dispatch/rejection, dataset
+handoff, independent-app reconciliation, same-app exclusion, unknown holds,
+open-hour refusal, and unexpected live-provider refusal. These plus existing
+runner and billing checks passed: 20 tests total.
+
+Both first paired evaluation results were durable before the old runner was
+paused. The remaining claim was released through the existing lifecycle API;
+both claims were confirmed cleaned. The old runner and gateway were then
+stopped, and a replacement gateway and operational entrypoint started with the
+same serving credential. No episode was rerun during handover. The old process
+exit is an intentional handover, not an experiment failure.
+
+Receipts: `operator-pause.json`, `operator-process.json`, and the existing
+Fleet release receipts. The replacement is supervised by
+`/tmp/gameworld-v9-operator-launch.py`; its log is `operator-launch.log`.
+The runtime credential environment is stored outside the repo in a mode-0600
+file and must not be printed or committed.
+
+At 01:36 UTC the wrapper reported `waiting-billing`, preserving the pending
+evaluation queue and the $2,000 cap. Earliest training-app reconciliation is
+02:00 UTC. The serving GPU remains live under its existing reservation; its
+idle time still incurs cost. This wait does not extend its resource deadline.
