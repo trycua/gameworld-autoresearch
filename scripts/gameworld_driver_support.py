@@ -1,4 +1,4 @@
-"""Install only authenticated missing driver test support in build-only claims."""
+"""Authenticated driver test support and bounded, hash-verified binary transport."""
 
 import argparse
 import hashlib
@@ -89,8 +89,36 @@ class DriverSupportBackend(FleetSandboxBackend):
     def __init__(self, controller=None):
         self.controller = controller
         self.support_roots = set()
+        self.transfer_roots = set()
 
     async def stage(self, sandbox, remote_root, files):
+        driver = files.get('cua-driver', b'')
+        if len(driver) > 16 * 1024 * 1024:
+            identity = files.get('candidate.json', files.get('config.json'))
+            if len(driver) > 64 * 1024 * 1024 or identity is None:
+                raise ValueError('Oversized driver requires a bounded candidate or rollout identity')
+            expected = json.loads(identity).get('driver_sha256')
+            if sha256(driver) != expected or any(name.startswith('driver-transfer-') for name in files):
+                raise ValueError('Driver transfer identity or staging names differ')
+            chunks = {f'driver-transfer-{index:03d}': driver[offset:offset + 4 * 1024 * 1024]
+                      for index, offset in enumerate(range(0, len(driver), 4 * 1024 * 1024))}
+            await super().stage(sandbox, remote_root, {**{name: data for name, data in files.items()
+                                                        if name != 'cua-driver'}, **chunks})
+            program = ('import hashlib,json,os; from pathlib import Path; '
+                       f'root=Path({remote_root!r}); names={list(chunks)!r}; '
+                       'target=root/"driver-transfer-assembled"; '
+                       'target.write_bytes(b"".join((root/name).read_bytes() for name in names)); '
+                       f'assert target.stat().st_size=={len(driver)}; '
+                       f'assert hashlib.sha256(target.read_bytes()).hexdigest()=={expected!r}; '
+                       'os.replace(target,root/"cua-driver"); '
+                       f'(root/"driver-transfer.json").write_text(json.dumps({{"sha256":{expected!r},'
+                       f'"bytes":{len(driver)},"chunks":{len(chunks)}}})); '
+                       '[(root/name).unlink() for name in names]')
+            result = await sandbox.shell.run('python3 -c ' + shlex.quote(program), timeout=60)
+            if not result.success:
+                raise RuntimeError('Chunked driver assembly failed integrity verification')
+            self.transfer_roots.add(remote_root)
+            return
         if set(files) != {'proposal.json', 'candidate.patch'}:
             return await super().stage(sandbox, remote_root, files)
         await super().stage(sandbox, remote_root, {**files, **bundle(Path(__file__).resolve().parents[1])})
@@ -102,6 +130,12 @@ class DriverSupportBackend(FleetSandboxBackend):
         self.support_roots.add(remote_root)
 
     async def collect(self, sandbox, remote_root, output, maximum):
+        if remote_root in self.transfer_roots:
+            result = await sandbox.shell.run(
+                f'cp {shlex.quote(remote_root + "/driver-transfer.json")} '
+                f'{shlex.quote(remote_root + "/output/transport/driver-transfer.json")}', timeout=15)
+            if not result.success:
+                raise RuntimeError('Driver transfer receipt could not be preserved')
         needs_support = remote_root in self.support_roots
         if self.controller is not None:
             with self.controller.ledger.transaction() as connection:

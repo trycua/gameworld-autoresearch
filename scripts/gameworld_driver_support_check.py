@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import shlex
+import subprocess
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -81,6 +83,65 @@ class SupportTests(unittest.TestCase):
             asyncio.run(DriverSupportBackend().stage(sandbox, '/tmp/episode', files))
         stage.assert_awaited_once_with(sandbox, '/tmp/episode', files)
         sandbox.shell.run.assert_not_awaited()
+
+    def test_large_driver_chunks_reassemble_identical_bytes(self):
+        driver = b'x' * (17 * 1024 * 1024)
+        remote = str(self.inputs)
+        files = {'candidate.json': json.dumps({'driver_sha256': sha256(driver)}).encode(),
+                 'cua-driver': driver, 'assignment.json': b'{}'}
+
+        async def stage(sandbox, root, staged):
+            self.assertNotIn('cua-driver', staged)
+            for name, data in staged.items():
+                self.assertLessEqual(len(data), 16 * 1024 * 1024)
+                (Path(root) / name).write_bytes(data)
+
+        async def run(command, timeout):
+            result = subprocess.run(shlex.split(command), capture_output=True)
+            return SimpleNamespace(success=result.returncode == 0)
+
+        sandbox = SimpleNamespace(shell=SimpleNamespace(run=run))
+        with patch('fps_bench.gameworld_fleet.FleetSandboxBackend.stage', side_effect=stage):
+            backend = DriverSupportBackend()
+            asyncio.run(backend.stage(sandbox, remote, files))
+        self.assertEqual((self.inputs / 'cua-driver').read_bytes(), driver)
+        self.assertEqual(json.loads((self.inputs / 'driver-transfer.json').read_text())['sha256'], sha256(driver))
+        self.assertFalse(list(self.inputs.glob('driver-transfer-*')))
+        self.assertIn(remote, backend.transfer_roots)
+
+    def test_large_driver_rejects_mismatched_identity_before_upload(self):
+        files = {'candidate.json': b'{"driver_sha256":"wrong"}', 'cua-driver': b'x' * (17 * 1024 * 1024)}
+        with patch('fps_bench.gameworld_fleet.FleetSandboxBackend.stage', new_callable=AsyncMock) as stage:
+            with self.assertRaisesRegex(ValueError, 'identity'):
+                asyncio.run(DriverSupportBackend().stage(None, '/tmp/episode', files))
+        stage.assert_not_awaited()
+
+    def test_large_rollout_driver_uses_admitted_identity(self):
+        driver = b'x' * (17 * 1024 * 1024)
+        files = {'config.json': json.dumps({'driver_sha256': sha256(driver)}).encode(), 'cua-driver': driver}
+        sandbox = SimpleNamespace(shell=SimpleNamespace(run=AsyncMock(return_value=SimpleNamespace(success=True))))
+        with patch('fps_bench.gameworld_fleet.FleetSandboxBackend.stage', new_callable=AsyncMock) as stage:
+            asyncio.run(DriverSupportBackend().stage(sandbox, '/tmp/rollout', files))
+        self.assertNotIn('cua-driver', stage.call_args.args[2])
+        sandbox.shell.run.assert_awaited_once()
+
+    def test_failed_assembly_is_not_marked_transferred(self):
+        driver = b'x' * (17 * 1024 * 1024)
+        files = {'candidate.json': json.dumps({'driver_sha256': sha256(driver)}).encode(), 'cua-driver': driver}
+        sandbox = SimpleNamespace(shell=SimpleNamespace(run=AsyncMock(return_value=SimpleNamespace(success=False))))
+        backend = DriverSupportBackend()
+        with patch('fps_bench.gameworld_fleet.FleetSandboxBackend.stage', new_callable=AsyncMock):
+            with self.assertRaisesRegex(RuntimeError, 'integrity'):
+                asyncio.run(backend.stage(sandbox, '/tmp/episode', files))
+        self.assertFalse(backend.transfer_roots)
+
+    def test_transfer_receipt_stays_outside_evaluator_inventory(self):
+        sandbox = SimpleNamespace(shell=SimpleNamespace(run=AsyncMock(return_value=SimpleNamespace(success=True))))
+        backend = DriverSupportBackend()
+        backend.transfer_roots.add('/tmp/episode')
+        with patch('fps_bench.gameworld_fleet.FleetSandboxBackend.collect', new_callable=AsyncMock):
+            asyncio.run(backend.collect(sandbox, '/tmp/episode', Path('/output'), 1024))
+        self.assertIn('/output/transport/driver-transfer.json', sandbox.shell.run.call_args.args[0])
 
     def test_evaluation_collection_has_no_extra_remote_operation(self):
         sandbox = SimpleNamespace(shell=SimpleNamespace(run=AsyncMock()))
