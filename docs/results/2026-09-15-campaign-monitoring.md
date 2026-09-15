@@ -62,3 +62,44 @@ This is progress evidence, not a completed campaign, training result,
 benchmark improvement, full-catalog coverage, or final cleanup receipt.
 The monitoring goal remains active. The existing $2,000 Modal cap is unchanged;
 LiteLLM token limits remain disabled.
+
+## Dataset handoff and first model outcome
+
+At approximately 01:04 UTC, the rollout completed and the source-serving GPU
+was terminated. The runner exited with code zero while the model workflow
+remained `awaiting_dataset`: its research worker handles driver patches and SFT
+datasets, but does not handle the coordinator's `register-training-dataset`
+action. This is an incomplete automation handoff, not campaign completion.
+
+The monitoring operator invoked the existing, frozen
+`GameWorldCoordinator.prepare_training_dataset` method for the queued action.
+It authenticated the rollout receipts, exported dataset
+`4e3a4330655923423e4b200ced54c1ee69a70a503f6b96ff3c4cf8d6f8f4847e`, and
+queued training without changing the proposal or evaluation rules. Evidence:
+`operator-dataset-registration.json` and ledger events 547-549.
+
+The runner resumed at approximately 01:06 UTC. The training job
+`gw-9e83ad9c9b21d48a54c2e5d9e1b98616` launched in Modal sandbox
+`sb-k2xx8K9nNO3nEmsy5ewafc` with a $5 reservation and 1,800-second deadline.
+The attempt failed with `ValueError`; no adapter was accepted. The sandbox was
+terminated and the workflow rejected at approximately 01:07 UTC. Direct Modal
+inspection confirmed the sandbox was terminal. Its billing is still pending.
+
+The exported dataset independently shows two 12-step trajectories, all 24
+actions invalid, with identical rewards (-0.08437500000000002). The inspected
+responses wrap JSON in Markdown fences, which the frozen parser rejects.
+The existing trainer refuses datasets where every group has zero reward
+variance. This is consistent with the failed attempt, but the runner retained
+only the exception type, not enough detail to prove the precise exception
+site. No parser relaxation, reward modification, or successful update is
+claimed.
+
+The loop automatically proceeded to research round 3 on the driver track.
+This is measured feedback for subsequent research, not a reason to patch game
+controls outside the research loop. The missing dataset handoff and incomplete
+failure detail remain controller automation issues for a future protocol fix.
+
+At the next telemetry check, logs and metrics were acknowledged with zero
+pending logs (`monitor-0108-telemetry.json`). Conservative Modal commitment is
+$431.013141 of $2,000, not an actual-billed-spend claim. The independent
+watchdog remains active. The monitoring goal remains open.
