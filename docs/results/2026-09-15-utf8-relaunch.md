@@ -77,3 +77,38 @@ Receipts in successor state: `relaunch.json`, `utf8-driver-build-verified.json`,
 `operational-extension.json`, and `operator-process.json`. The live log is
 `coordinator-v10/operator.log`; credentials remain in the mode-0600 environment
 file outside the repository. The accounting fork receipt is `accounting-fork-v10.json`.
+
+## Large-binary transport and end-to-end verification
+
+The first candidate evaluations exposed a separate staging limit: the rebuilt
+driver is 36,839,008 bytes, while a single Fleet staging input is limited to
+16 MiB. The operational backend now stages admitted candidate/rollout drivers
+in 4 MiB chunks, with a 64 MiB total bound, then verifies the assembled byte
+count and SHA256 before exposing the executable. It does not strip, rebuild,
+or otherwise alter the approved binary. Ordinary inputs retain their existing
+bounds. Transfer receipts live under the existing transport-artifact directory,
+outside the evaluator's strict root-file inventory.
+
+Four initial assignment failures are retained: three before the oversized-upload
+repair and one during validation of transfer-receipt placement. No failed
+assignment was retried, removed, or converted into a successful outcome. The
+operator was restarted only at idle episode boundaries; serving stayed live.
+The frozen evaluator, rewards, policies, binary identity, and task assignments
+were unchanged. All 71 targeted offline tests now pass, including real local
+chunk reassembly, mismatched-identity rejection, failed assembly, rollout
+identity, and transport-receipt placement.
+
+At 14:12:46 UTC, patched-driver episodes for both 2048 and Flappy Bird had
+completed their full 60 steps and were cleaned. Their transfer receipts verify
+the exact admitted binary assembled from nine chunks. Independent replay at
+14:11:57 verified the six episodes available at that checkpoint and all 360
+evaluator steps; logs and metrics were acknowledged with zero export errors.
+By the later queue snapshot, eight assignments had completed, four were marked
+failed, two were admitted, and 122 remained pending. These are partial campaign
+results, not evidence of policy improvement.
+
+The campaign is actively evaluating. Conservative commitment remains
+$543.640341 of $2,000, with no LiteLLM token limit. Evidence:
+`relaunch-e2e-verified.json` and `independent-replay-20260915-141157.json`.
+Use the canonical `operator-process.json` rather than earlier PID records;
+the resumed operator PID at this checkpoint is 55745.
