@@ -538,3 +538,31 @@ Replay resumed successfully at 09:52:05 UTC: 72 completed episodes and 4,320
 steps verified. The running operator still has the earlier exporter loaded;
 deploy the update at the next idle capacity/billing boundary, not during an
 episode. Receipt: `independent-replay-20260915-095205.json`.
+
+## Verified episode-boundary rollover
+
+The operator stopped candidate serving at 10:30:55 UTC between episodes,
+with 104 returned assignments and 32 pending. Independent replay verified
+100 completed episodes and all 6,000 evaluator steps, plus four preserved
+startup failures (three Vex 3 assignments and one Temple Run 2 assignment).
+All 104 returned jobs were cleaned. Direct provider inspection at 10:35:27
+found no live sandboxes in either dedicated Modal app and no campaign-template
+Fleet claims. Receipt: `cubefield-rollover-cleanup-20260915.json`.
+
+During that idle billing boundary, the telemetry fix was deployed by restarting
+only the operator and gateway. The new operator PID is 47696, gateway 47695,
+and supervisor 47692. No admitted episode was interrupted. Independent replay
+`independent-replay-20260915-103426.json` acknowledged logs and metrics with
+no errors or pending logs.
+
+At 11:00:13 UTC billing reconciled $5.309342 observed cost while retaining the
+full $15 allocation. Replacement `gw-replace-858998e205f4cb1af2ebe8d8` became
+ready at 11:02:24 and evaluation resumed. An independent identity comparison
+verified unchanged model revision, adapter files and manifest, parent policy,
+candidate policy, serving image, training provenance, and comparison identity.
+All 136 assignments remain distinct; none was retried or rewritten. Receipt:
+`cubefield-replacement-identity-20260915.json`.
+
+The replacement reserves $13.813600, bringing conservative Modal commitment
+to $528.640341 of $2,000. The campaign deadline remains 17:00:37 UTC, with
+no LiteLLM token limit. Comparison completion and final cleanup remain pending.
