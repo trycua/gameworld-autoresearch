@@ -494,3 +494,27 @@ no completed Cubefield comparison episodes yet. Serving handoff telemetry
 acknowledged both logs and metrics with no errors or pending logs. This is
 operational progress, not a benchmark result or terminal campaign completion.
 The operator, supervisor, gateway, and independent cleanup watchdog remain live.
+
+## Verified comparison progress at 08:43 UTC
+
+Independent replay `independent-replay-20260915-084258.json` verified 24
+completed episodes and all 1,440 recorded evaluator steps. Two additional
+baseline assignments failed during GameWorld initialization: Vex 3
+(`gw-5cabbb185be4a17c26a3b4cf8776e7a5`) and Temple Run 2
+(`gw-4391a0177ccdbc4890da850502d331c4`). Their exported failure artifacts
+were verified; neither assignment was retried or patched. The workflow remains
+evaluating, with 26 returned assignments, two admitted, and 108 pending.
+No model-quality conclusion is drawn from this incomplete comparison.
+
+The queue audit confirms 136 distinct candidate/task/repeat assignments,
+68 per policy across 34 development tasks. This is the frozen development
+comparison, not a claim of completed coverage of all 170 catalog tasks.
+All 18 returned jobs present at the 08:32 cleanup checkpoint were cleaned.
+Direct provider inspection at 08:13:46 found one serving sandbox, no training
+sandbox, and two campaign-template desktop claims. The current allocation
+remains $514.826741; no token limit is enforced. Replay telemetry acknowledged
+logs and metrics with no errors and zero pending logs.
+
+Receipts: `provider-capacity-20260915-0810.json` (its embedded timestamp is
+08:13:46), `cubefield-progress-20260915-0832.json`, and the replay receipt above.
+Monitoring and terminal cleanup verification remain unfinished.
