@@ -19,6 +19,41 @@ class OperatorTests(unittest.TestCase):
         self.runner = self.fixture.runner
         self.operator = CampaignOperator(self.runner)
 
+    def add_unexpired_serving_bill(self, next_kind=None, known_scope=True):
+        deadline = int(time.time()) + 3600
+        self.runner.controller.ledger.reserve('job:previous-serving:modal_micro_usd',
+                                              'modal_micro_usd', 1000000, deadline)
+        with self.runner.controller.ledger.transaction() as connection:
+            connection.execute("INSERT INTO jobs(id,candidate,kind,resource_group,specification,deadline,state) "
+                               "VALUES ('previous-serving','baseline','serving','training','{}',?,'billing_pending')",
+                               (deadline,))
+            if known_scope:
+                connection.execute('CREATE TABLE gameworld_serving_launches (job_id TEXT PRIMARY KEY, plan TEXT)')
+                connection.execute('INSERT INTO gameworld_serving_launches VALUES (?,?)',
+                                   ('previous-serving', canonical({'app_id': 'ap-serving'}).decode()))
+            if next_kind:
+                connection.execute('UPDATE gameworld_work_items SET kind=?', (next_kind,))
+
+    def test_same_app_gpu_waits_before_unexpired_bill_can_strand_live_capacity(self):
+        self.add_unexpired_serving_bill('serving')
+        with patch.object(self.runner, 'run_once', new_callable=AsyncMock) as dispatch:
+            result = asyncio.run(self.operator.cycle())
+        dispatch.assert_not_awaited()
+        self.assertEqual(result['status'], 'waiting-billing')
+        self.assertEqual(result['reservations'], ['job:previous-serving:modal_micro_usd'])
+
+    def test_other_app_gpu_is_not_blocked_by_unexpired_bill(self):
+        self.add_unexpired_serving_bill('training')
+        self.assertEqual(self.operator.billing_waits(), [])
+
+    def test_desktop_work_is_not_blocked_by_unexpired_bill(self):
+        self.add_unexpired_serving_bill()
+        self.assertEqual(self.operator.billing_waits(), [])
+
+    def test_unknown_previous_app_blocks_new_gpu(self):
+        self.add_unexpired_serving_bill('serving', known_scope=False)
+        self.assertEqual(self.operator.billing_waits(), ['job:previous-serving:modal_micro_usd'])
+
     def test_expired_hold_waits_without_dispatch_or_candidate_rejection(self):
         ledger = self.runner.controller.ledger
         ledger.reserve('old-training', 'modal_micro_usd', 10, int(time.time()) + 600)

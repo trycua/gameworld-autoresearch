@@ -86,9 +86,28 @@ class CampaignOperator:
 
     def billing_waits(self):
         with self.controller.ledger.transaction() as connection:
-            return [row['id'] for row in connection.execute(
+            waits = {row['id'] for row in connection.execute(
                 "SELECT id FROM reservations WHERE state='held' AND expires_at<=? ORDER BY id",
-                (int(time.time()) + 30,))]
+                (int(time.time()) + 30,))}
+            upcoming = {row['kind'] for row in connection.execute(
+                "SELECT kind FROM gameworld_work_items WHERE state IN ('pending','admitted') "
+                "AND kind IN ('training','serving')")}
+            apps = {self.runner.modal_config[kind + '_app_id'] for kind in upcoming}
+            if apps:
+                for job in connection.execute(
+                        "SELECT id,kind FROM jobs WHERE state='billing_pending' "
+                        "AND kind IN ('training','serving')"):
+                    table = ('modal_training_launches' if job['kind'] == 'training'
+                             else 'gameworld_serving_launches')
+                    exists = connection.execute(
+                        "SELECT 1 FROM sqlite_master WHERE name=? AND type='table'", (table,)).fetchone()
+                    launch = (connection.execute(f'SELECT plan FROM {table} WHERE job_id=?',
+                                                 (job['id'],)).fetchone() if exists else None)
+                    if launch is None or json.loads(launch['plan'])['app_id'] in apps:
+                        waits.update(row['id'] for row in connection.execute(
+                            "SELECT id FROM reservations WHERE id=? AND state='held'",
+                            (f"job:{job['id']}:modal_micro_usd",)))
+            return sorted(waits)
 
     async def cycle(self):
         state = self.controller.snapshot()

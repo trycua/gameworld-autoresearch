@@ -367,3 +367,19 @@ history mechanism. Its persisted context contains the completed model action,
 rejection, and exact infrastructure-failure decision. The handoff audit verifies
 that context against the ledger; no parallel hypothesis history was introduced.
 The full campaign remains active, with further research and final billing outstanding.
+
+## Same-app billing handoff guard
+
+Before the next GPU launch, monitoring identified a repeat of the earlier capacity
+stall risk: an unexpired hold for stopped serving capacity could become overdue
+during a new run in the same Modal app, while app-scoped reconciliation refuses
+to close that app with a sandbox still running. Starting another GPU before the
+old closed-hour bill clears can therefore strand paid capacity later in evaluation.
+
+The operational wrapper now waits before queued same-app GPU work when a stopped
+job still has a held reservation, even if that hold has not expired yet. It keeps
+the existing authenticated reconciliation and full-allocation retention rules.
+Unexpired bills do not block desktop work or GPU work in another app. Unknown
+prior app ownership fails closed. This changes operational dispatch timing only,
+not hypotheses, frozen evaluator inputs, job assignments, or the Modal cap.
+All 29 operational, serving-identity, runner, and billing checks pass.
