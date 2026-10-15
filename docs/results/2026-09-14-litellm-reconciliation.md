@@ -7,7 +7,7 @@ GameWorld benchmark result and incurred no Modal spend.
 
 ## Dedicated key
 
-- Endpoint: `https://litellm-public.tail204509.ts.net`.
+- Endpoint: `LITELLM_RESEARCH_UPSTREAM` (the research LiteLLM gateway).
 - Key alias: `gameworld-autoresearch-20260914`.
 - Allowed models: Astra, Sol, Terra and Luna aliases used by the Pi profile.
 - Expiry: September 21, 2026 at 11:44:24 UTC.
